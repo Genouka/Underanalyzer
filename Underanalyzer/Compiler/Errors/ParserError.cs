@@ -11,12 +11,25 @@ namespace Underanalyzer.Compiler.Errors;
 /// <summary>
 /// Represents an error that occurred when parsing code into an AST.
 /// </summary>
-public sealed class ParserError : ICompileError
+public sealed class ParserError : ICompileError, IPositionedCompileError
 {
     /// <inheritdoc/>
     public string BaseMessage { get; }
 
     private readonly IToken? _nearbyToken;
+
+    /// <inheritdoc/>
+    public int? Line => _nearbyToken is IToken token
+        ? token.Context.GetLineAndColumnFromPos(token.TextPosition).Line
+        : null;
+
+    /// <inheritdoc/>
+    public int? Column => _nearbyToken is IToken token
+        ? token.Context.GetLineAndColumnFromPos(token.TextPosition).Column
+        : null;
+
+    /// <inheritdoc/>
+    public int? TextPosition => _nearbyToken?.TextPosition;
 
     /// <summary>
     /// Internal constructor for parser errors. Takes a nearby token, or null if there is none.

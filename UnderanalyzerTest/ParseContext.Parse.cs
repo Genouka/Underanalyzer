@@ -5,6 +5,7 @@
 */
 
 using Underanalyzer;
+using Underanalyzer.Compiler.Errors;
 using Underanalyzer.Compiler.Nodes;
 using Underanalyzer.Compiler.Parser;
 
@@ -1260,5 +1261,34 @@ public class ParseContext_Parse
 
         Assert.Empty(context.CompileContext.Errors);
         Assert.False(context.CompileContext.HasErrors);
+    }
+
+    [Fact]
+    public void TestErrorsExposePositions()
+    {
+        // Invalid code: unterminated string literal on line 2, column 4.
+        ParseContext context = TestUtil.Parse(
+            """
+            var x = 1;
+            var y = "unterminated
+            var z = 2;
+            """);
+
+        Assert.True(context.CompileContext.HasErrors);
+
+        // At least one error should carry concrete source position information.
+        bool foundPositioned = false;
+        foreach (var error in context.CompileContext.Errors)
+        {
+            if (error is IPositionedCompileError positioned)
+            {
+                if (positioned.Line is int line && positioned.Column is int &&
+                    positioned.TextPosition is int textPos && line >= 1 && textPos >= 0)
+                {
+                    foundPositioned = true;
+                }
+            }
+        }
+        Assert.True(foundPositioned, "Expected at least one positioned compile error");
     }
 }
