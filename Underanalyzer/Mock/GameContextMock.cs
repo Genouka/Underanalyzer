@@ -93,6 +93,9 @@ public class GameContextMock : IGameContext
     /// <inheritdoc/>
     public ICodeBuilder CodeBuilder { get; }
 
+    /// <inheritdoc/>
+    public IFunctionArgTypeProvider? FunctionArgTypeProvider { get; set; } = null;
+
     /// <summary>
     /// A Dictionary for maintaining the same variables throughout a compilation process.
     /// </summary>

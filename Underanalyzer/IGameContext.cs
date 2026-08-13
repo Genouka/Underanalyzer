@@ -333,4 +333,25 @@ public interface IGameContext
     /// <param name="name">Outputs the constant name if lookup was successful; otherwise <see langword="null"/>.</param>
     /// <returns><see langword="true"/> if a constant name was found; <see langword="false"/> otherwise.</returns>
     public bool LookupCommonNegativeConstant(int value, [NotNullWhen(true)] out string? name);
+
+    /// <summary>
+    /// Optional provider of code entries for global functions, used to infer the argument types of
+    /// user-defined scripts/functions during decompilation. May be <see langword="null"/> to disable
+    /// automatic argument type inference.
+    /// </summary>
+    public IFunctionArgTypeProvider? FunctionArgTypeProvider { get; }
+}
+
+/// <summary>
+/// Provides code entries for global functions, so that the decompiler can analyze a function's body
+/// to infer the types of its arguments (e.g. <c>argument0</c>).
+/// </summary>
+public interface IFunctionArgTypeProvider
+{
+    /// <summary>
+    /// Returns the code entry corresponding to the given global function name, or <see langword="null"/> if none exists.
+    /// </summary>
+    /// <param name="functionName">Name of the global function to look up.</param>
+    /// <returns>The code entry, or <see langword="null"/> if not found.</returns>
+    public IGMCode? GetFunctionCode(string functionName);
 }

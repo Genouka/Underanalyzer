@@ -11,7 +11,9 @@ namespace Underanalyzer.Decompiler.GameSpecific;
 
 /// <summary>
 /// Macro type resolver for a global game context. Delegates resolution to individual code entries, then global lookup.
-/// Nothing within this should be modified while decompilation is in progress that uses this object.
+/// When no type information is registered for a user-defined function's arguments, this resolver may
+/// automatically infer and cache it by decompiling the function's code (see <see cref="FunctionArgTypeInference"/>).
+/// All deferred inference and caching is thread-safe.
 /// </summary>
 public class GlobalMacroTypeResolver : IMacroTypeResolver
 {
@@ -70,7 +72,19 @@ public class GlobalMacroTypeResolver : IMacroTypeResolver
             }
         }
 
-        return GlobalNames.ResolveFunctionArgumentTypes(cleaner, functionName);
+        if (GlobalNames.ResolveFunctionArgumentTypes(cleaner, functionName) is IMacroType globalResolved)
+        {
+            return globalResolved;
+        }
+
+        // No pre-registered type information was found for this function. If enabled, attempt to
+        // infer its argument types by analyzing its code, and cache the result for future lookups.
+        if (cleaner.Context.Settings.InferFunctionArgumentTypes)
+        {
+            return TryInferArgumentTypes(cleaner, functionName);
+        }
+
+        return null;
     }
 
     public IMacroType? ResolveReturnValueType(ASTCleaner cleaner, string? functionName)
@@ -90,5 +104,101 @@ public class GlobalMacroTypeResolver : IMacroTypeResolver
         }
 
         return GlobalNames.ResolveReturnValueType(cleaner, functionName);
+    }
+
+    // Cache of inferred function argument types, keyed by function name (null values are cached "no result").
+    private readonly object _inferLock = new();
+    private readonly Dictionary<string, IMacroType?> _inferredFunctionArguments = [];
+    private readonly HashSet<string> _inferringFunctionArguments = [];
+
+    /// <summary>
+    /// Attempts to infer the argument types of the given function by decompiling and analyzing its code.
+    /// The result is cached so that subsequent lookups are instant. This is best-effort; failures result
+    /// in a cached <see langword="null"/> and a fallback to no resolution.
+    /// </summary>
+    private IMacroType? TryInferArgumentTypes(ASTCleaner cleaner, string functionName)
+    {
+        // No provider available means inference is not supported in this game context
+        if (cleaner.Context.GameContext.FunctionArgTypeProvider is not IFunctionArgTypeProvider provider)
+        {
+            return null;
+        }
+
+        lock (_inferLock)
+        {
+            // Check cached result (including cached "no result")
+            if (_inferredFunctionArguments.TryGetValue(functionName, out IMacroType? cached))
+            {
+                return cached;
+            }
+
+            // Avoid infinite recursion when inferring a function that calls itself (directly or transitively)
+            if (_inferringFunctionArguments.Contains(functionName))
+            {
+                return null;
+            }
+
+            // Find the code entry for the function
+            IGMCode? code = provider.GetFunctionCode(functionName);
+            if (code is null)
+            {
+                _inferredFunctionArguments[functionName] = null;
+                return null;
+            }
+
+            _inferringFunctionArguments.Add(functionName);
+            try
+            {
+                // Decompile the function's code entry in a fresh context
+                DecompileContext targetContext = new(cleaner.Context.GameContext, code, cleaner.Context.Settings);
+                AST.IStatementNode ast = targetContext.DecompileToAST();
+
+                // Set up a cleaner for the target, with a valid fragment context for macro resolution
+                AST.ASTCleaner targetCleaner = new(targetContext);
+                if (targetContext.FragmentNodes is { Count: > 0 } fragments)
+                {
+                    targetCleaner.PushFragmentContext(new AST.ASTFragmentContext(null, fragments[0]));
+                }
+                try
+                {
+                    IMacroType?[] types = FunctionArgTypeInference.Infer(targetCleaner, ast, code);
+
+                    // Only register if at least one argument type was inferred
+                    IMacroType? argsMacroType = null;
+                    foreach (IMacroType? type in types)
+                    {
+                        if (type is not null)
+                        {
+                            argsMacroType = new FunctionArgsMacroType(types);
+                            break;
+                        }
+                    }
+                    if (argsMacroType is not null)
+                    {
+                        GlobalNames.DefineFunctionArgumentsType(functionName, argsMacroType);
+                    }
+
+                    _inferredFunctionArguments[functionName] = argsMacroType;
+                    return argsMacroType;
+                }
+                finally
+                {
+                    if (targetCleaner.TopFragmentContext is not null)
+                    {
+                        targetCleaner.PopFragmentContext();
+                    }
+                }
+            }
+            catch
+            {
+                // Inference is best-effort; fall back to no resolution
+                _inferredFunctionArguments[functionName] = null;
+                return null;
+            }
+            finally
+            {
+                _inferringFunctionArguments.Remove(functionName);
+            }
+        }
     }
 }

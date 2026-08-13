@@ -18,6 +18,11 @@ public class UnionMacroType : IMacroTypeInt32, IMacroTypeInt64, IMacroTypeFuncti
 
     public bool Required { get; }
 
+    /// <summary>
+    /// Returns the macro types contained within this union, in order.
+    /// </summary>
+    public IReadOnlyList<IMacroType> GetTypes() => Types;
+
     public UnionMacroType(IEnumerable<IMacroType> types)
     {
         Types = new(types);

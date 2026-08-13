@@ -11,13 +11,22 @@ namespace Underanalyzer.Compiler.Errors;
 /// <summary>
 /// Represents an error that occurred when lexing code.
 /// </summary>
-public sealed class LexerError : ICompileError
+public sealed class LexerError : ICompileError, IPositionedCompileError
 {
     /// <inheritdoc/>
     public string BaseMessage { get; }
 
     private readonly LexContext _lexContext;
-    private readonly int _textPosition; 
+    private readonly int _textPosition;
+
+    /// <inheritdoc/>
+    public int? Line => _lexContext.GetLineAndColumnFromPos(_textPosition).Line;
+
+    /// <inheritdoc/>
+    public int? Column => _lexContext.GetLineAndColumnFromPos(_textPosition).Column;
+
+    /// <inheritdoc/>
+    public int? TextPosition => _textPosition; 
 
     /// <summary>
     /// Internal constructor for lexer errors. Takes the basic message, 

@@ -18,6 +18,11 @@ public class IntersectMacroType : IMacroTypeInt32, IMacroTypeInt64, IMacroTypeFu
 
     public bool Required { get; }
 
+    /// <summary>
+    /// Returns the macro types contained within this intersection, in order.
+    /// </summary>
+    public IReadOnlyList<IMacroType> GetTypes() => Types;
+
     public IntersectMacroType(IEnumerable<IMacroType> types)
     {
         Types = new(types);

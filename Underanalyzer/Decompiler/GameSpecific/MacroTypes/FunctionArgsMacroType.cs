@@ -17,6 +17,23 @@ public class FunctionArgsMacroType(IEnumerable<IMacroType?> types) : IMacroType,
     private List<IMacroType?> Types { get; } = new(types);
 
     /// <summary>
+    /// Returns the number of argument types contained within this macro type.
+    /// </summary>
+    public int ArgumentCount => Types.Count;
+
+    /// <summary>
+    /// Returns the macro type for the argument at the given index, or <see langword="null"/> if none is defined.
+    /// </summary>
+    public IMacroType? GetArgumentType(int index)
+    {
+        if (index >= 0 && index < Types.Count)
+        {
+            return Types[index];
+        }
+        return null;
+    }
+
+    /// <summary>
     /// Resolves this macro type for a given function call in the AST.
     /// </summary>
     public IFunctionCallNode? Resolve(ASTCleaner cleaner, IFunctionCallNode call)
@@ -30,8 +47,9 @@ public class FunctionArgsMacroType(IEnumerable<IMacroType?> types) : IMacroType,
             callArgumentsStart = 1;
         }
 
-        if (Types.Count != callArgumentsCount)
+        if (Types.Count < callArgumentsCount)
         {
+            // There are more arguments in the call than registered types; cannot resolve all arguments.
             return null;
         }
 

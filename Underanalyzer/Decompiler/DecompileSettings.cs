@@ -133,6 +133,13 @@ public interface IDecompileSettings
     public bool CreateEnumDeclarations { get; }
 
     /// <summary>
+    /// If true, the decompiler will attempt to infer the argument types of user-defined scripts/functions
+    /// by analyzing how arguments such as <c>argument0</c> flow through their code. Inferred types are
+    /// used at call sites to expand integer literals into named constants (enums, assets, colors, etc.).
+    /// </summary>
+    public bool InferFunctionArgumentTypes { get; }
+
+    /// <summary>
     /// Base type name for the enum representing all unknown enum values.
     /// Should be a valid enum name in GML, or <see langword="null"/> if the unknown enum should not be generated/used at all.
     /// </summary>
@@ -192,6 +199,7 @@ public class DecompileSettings : IDecompileSettings
     public bool CleanupLocalVarDeclarations { get; set; } = true;
     public bool CleanupTemplateStrings { get; set; } = true;
     public bool CreateEnumDeclarations { get; set; } = true;
+    public bool InferFunctionArgumentTypes { get; set; } = true;
     public string UnknownEnumName { get; set; } = "UnknownEnum";
     public string UnknownEnumValuePattern { get; set; } = "Value_{0}";
     public string UnknownArgumentNamePattern { get; set; } = "arg{0}";
