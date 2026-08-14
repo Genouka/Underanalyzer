@@ -84,18 +84,24 @@ public class BinaryNode : IMultiExpressionNode, IMacroResolvableNode, ICondition
         Left = Left.Clean(cleaner);
         Right = Right.Clean(cleaner);
 
-        // Resolve macro types carrying between left and right nodes
-        if (Left is IMacroTypeNode leftTypeNode && Right is IMacroResolvableNode rightResolvableNode &&
-            leftTypeNode.GetExpressionMacroType(cleaner) is IMacroType leftMacroType &&
-            rightResolvableNode.ResolveMacroType(cleaner, leftMacroType) is IExpressionNode rightResolved)
+        // Resolve macro types carrying between left and right nodes. Only comparisons unify the
+        // types of both operands (e.g. "x == sprWatered"). For arithmetic operations (e.g. "gmi + 1",
+        // "len - 1") the right operand is a numeric offset/modifier, so it must not be collapsed into
+        // the other operand's asset type.
+        if (Instruction.Kind == Opcode.Compare)
         {
-            Right = rightResolved;
-        }
-        else if (Right is IMacroTypeNode rightTypeNode && Left is IMacroResolvableNode leftResolvableNode &&
-                 rightTypeNode.GetExpressionMacroType(cleaner) is IMacroType rightMacroType &&
-                 leftResolvableNode.ResolveMacroType(cleaner, rightMacroType) is IExpressionNode leftResolved)
-        {
-            Left = leftResolved;
+            if (Left is IMacroTypeNode leftTypeNode && Right is IMacroResolvableNode rightResolvableNode &&
+                leftTypeNode.GetExpressionMacroType(cleaner) is IMacroType leftMacroType &&
+                rightResolvableNode.ResolveMacroType(cleaner, leftMacroType) is IExpressionNode rightResolved)
+            {
+                Right = rightResolved;
+            }
+            else if (Right is IMacroTypeNode rightTypeNode && Left is IMacroResolvableNode leftResolvableNode &&
+                     rightTypeNode.GetExpressionMacroType(cleaner) is IMacroType rightMacroType &&
+                     leftResolvableNode.ResolveMacroType(cleaner, rightMacroType) is IExpressionNode leftResolved)
+            {
+                Left = leftResolved;
+            }
         }
 
         // Infer the return types of nested function calls from the typed constants they are compared
@@ -219,7 +225,12 @@ public class BinaryNode : IMultiExpressionNode, IMacroResolvableNode, ICondition
             Left = leftResolved;
             didAnything = true;
         }
-        if (Right is IMacroResolvableNode rightResolvable &&
+
+        // For comparisons, both operands take the same type. For arithmetic operations, the right
+        // operand is a numeric modifier (e.g. "gmi + 1", "len - 1") and must not be expanded as an
+        // asset name.
+        if (Instruction.Kind == Opcode.Compare &&
+            Right is IMacroResolvableNode rightResolvable &&
             rightResolvable.ResolveMacroType(cleaner, type) is IExpressionNode rightResolved)
         {
             Right = rightResolved;

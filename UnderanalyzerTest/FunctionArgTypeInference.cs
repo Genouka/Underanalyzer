@@ -749,6 +749,40 @@ public class FunctionArgTypeInferenceTests
     }
 
     [Fact]
+    public void TestNoReturnTypeInferenceForBuiltinsFromLinkedScript()
+    {
+        GameContextMock gameContext = CreateGameContext(out MockFunctionArgTypeProvider provider);
+        DefineGlobalFunction(gameContext, "dialogs_replay");
+
+        // dialogs_replay's return type is already known (e.g. inferred from call-site usage). Its
+        // body assigns a builtin call's result to a local variable, and returns a builtin call
+        // directly. These builtins must NOT inherit dialogs_replay's return type, otherwise their
+        // results would be treated as sprites everywhere, expanding unrelated integer literals
+        // (e.g. "string_length(x) - 1" becoming "string_length(x) - sprNightUse").
+        provider.AddCode("dialogs_replay", """
+            push.v argument.argument0
+            call.i string_length 1
+            pop.v.i local.len
+            push.v local.len
+            pushi.e 2
+            conv.i.v
+            push.v argument.argument0
+            call.i string_copy 3
+            ret.v
+            """, gameContext, "gml_Script_dialogs_replay");
+
+        GlobalMacroTypeResolver resolver = (GlobalMacroTypeResolver)gameContext.GameSpecificRegistry.MacroResolver;
+        resolver.GlobalNames.DefineFunctionReturnType("dialogs_replay", new AssetMacroType(AssetType.Sprite));
+
+        // Decompiling the body must not register the builtins as returning sprites
+        IGMCode code = provider.GetFunctionCode("dialogs_replay")!;
+        _ = new DecompileContext(gameContext, code, new DecompileSettings()).DecompileToString();
+
+        Assert.Null(resolver.GlobalNames.TryGetFunctionReturnType("string_length"));
+        Assert.Null(resolver.GlobalNames.TryGetFunctionReturnType("string_copy"));
+    }
+
+    [Fact]
     public void TestInferReturnTypeDisabledBySetting()
     {
         GameContextMock gameContext = CreateGameContext(out _);

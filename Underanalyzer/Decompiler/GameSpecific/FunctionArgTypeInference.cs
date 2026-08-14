@@ -188,6 +188,7 @@ public static class FunctionArgTypeInference
 
         // Register the function's return type under both the bare function name (for call sites)
         // and the code entry name form (for "return" statements in the body itself)
+        TraceRegistration(globalResolver, functionName, returnType, "MaybeInferReturnValueTypes");
         RegisterFunctionReturnType(globalResolver, functionName, returnType);
         if (!string.Equals(functionName, codeEntryName, StringComparison.Ordinal))
         {
@@ -213,6 +214,14 @@ public static class FunctionArgTypeInference
         {
             if (!IsReturnTypeRegistered(globalResolver, linkedFunction))
             {
+                // Only link user-defined functions. Builtin functions (e.g. string_length,
+                // ds_map_find_value, real) must never inherit the caller's return type, otherwise
+                // unrelated numeric literals across the whole game would be expanded as sprite names.
+                if (cleaner.Context.GameContext.FunctionArgTypeProvider?.GetFunctionCode(linkedFunction) is null)
+                {
+                    continue;
+                }
+                TraceRegistration(globalResolver, linkedFunction, returnType, "MaybeInferReturnValueTypes-linked");
                 RegisterFunctionReturnType(globalResolver, linkedFunction, returnType);
                 RegisterFunctionReturnType(globalResolver, "gml_Script_" + linkedFunction, returnType);
             }
@@ -291,6 +300,7 @@ public static class FunctionArgTypeInference
         {
             return;
         }
+        TraceRegistration(globalResolver, functionName, usedAsType, "InferReturnTypeFromCallSiteUsage");
         RegisterFunctionReturnType(globalResolver, functionName, usedAsType);
         if (!functionName.StartsWith("gml_Script_", StringComparison.Ordinal))
         {
@@ -390,6 +400,14 @@ public static class FunctionArgTypeInference
         {
             resolver.GlobalNames.DefineFunctionReturnType(functionName, type);
         }
+    }
+
+    /// <summary>
+    /// Temporary diagnostic: traces function return type registrations.
+    /// </summary>
+    private static void TraceRegistration(GlobalMacroTypeResolver resolver, string functionName, IMacroType type, string source)
+    {
+        //System.Console.Error.WriteLine($"INFER-RET-REG [{source}] {functionName} -> {type}");
     }
 
     /// <summary>
