@@ -783,6 +783,72 @@ public class FunctionArgTypeInferenceTests
     }
 
     [Fact]
+    public void TestNoExpansionOfCompoundAssignmentRightOperand()
+    {
+        GameContextMock gameContext = CreateGameContext(out _);
+        gameContext.DefineMockAsset(AssetType.Sound, 1, "snd_chest_open");
+        gameContext.GameSpecificRegistry.MacroResolver.GlobalNames.DefineFunctionArgumentsType("audio_exists",
+            new FunctionArgsMacroType([gameContext.GameSpecificRegistry.FindType("Asset.Sound")]));
+
+        // The local variable is used at a sound-typed argument position (so its inferred type is
+        // Sound) and assigned a sound index. It is then incremented; the right operand of the
+        // compound assignment is a numeric offset and must NOT be expanded to a sound name
+        // (previously "gmi += 1" wrongly became "gmi += sndClick").
+        TestUtil.VerifyDecompileResult(
+            """
+            pushi.e 1
+            pop.v.i local.gmi
+            push.v local.gmi
+            call.i audio_exists 1
+            popz.v
+            push.v local.gmi
+            pushi.e 1
+            add.i.v
+            pop.v.i local.gmi
+            push.v local.gmi
+            call.i audio_exists 1
+            popz.v
+            """,
+            """
+            var gmi = snd_chest_open;
+            audio_exists(gmi);
+            gmi += 1;
+            audio_exists(gmi);
+            """,
+            gameContext
+        );
+    }
+
+    [Fact]
+    public void TestNoExpansionOfArithmeticRightOperandAsAsset()
+    {
+        GameContextMock gameContext = CreateGameContext(out _);
+        gameContext.DefineMockAsset(AssetType.Sprite, 1, "sprFirstSprite");
+        gameContext.DefineMockAsset(AssetType.Sprite, 12, "sprKnown");
+        DefineGlobalFunction(gameContext, "get_sprite_index");
+
+        // get_sprite_index's return type is known to be a sprite (e.g. inferred at a call site)
+        GlobalMacroTypeResolver resolver = (GlobalMacroTypeResolver)gameContext.GameSpecificRegistry.MacroResolver;
+        resolver.GlobalNames.DefineFunctionReturnType("get_sprite_index", new AssetMacroType(AssetType.Sprite));
+
+        // In "get_sprite_index(x) - 1", the "1" is a numeric offset of the sprite index, not a sprite
+        // asset (previously it wrongly became "get_sprite_index(x) - sprFirstSprite").
+        TestUtil.VerifyDecompileResult(
+            """
+            pushi.e 5
+            call.i get_sprite_index 1
+            pushi.e 1
+            sub.i.v
+            pop.v.v self.result
+            """,
+            """
+            result = get_sprite_index(5) - 1;
+            """,
+            gameContext
+        );
+    }
+
+    [Fact]
     public void TestInferReturnTypeDisabledBySetting()
     {
         GameContextMock gameContext = CreateGameContext(out _);
