@@ -37,6 +37,20 @@ public class GlobalMacroTypeResolver : IMacroTypeResolver
         CodeEntryNames[codeEntry] = resolver;
     }
 
+    /// <summary>
+    /// Defines a variable's macro type for a specific code entry, creating a name resolver for that
+    /// code entry if one does not already exist.
+    /// </summary>
+    public void DefineVariableTypeForCodeEntry(string codeEntry, string variableName, IMacroType? type)
+    {
+        if (!CodeEntryNames.TryGetValue(codeEntry, out NameMacroTypeResolver? resolver))
+        {
+            resolver = new NameMacroTypeResolver();
+            CodeEntryNames[codeEntry] = resolver;
+        }
+        resolver.DefineVariableType(variableName, type);
+    }
+
     public IMacroType? ResolveVariableType(ASTCleaner cleaner, string? variableName)
     {
         if (variableName is null)

@@ -127,6 +127,15 @@ public class AssignNode : IStatementNode, IExpressionNode, IBlockCleanupNode
             {
                 Value = valueResolved;
             }
+
+            // Reverse inference: when the assigned value is a function argument and this function's
+            // argument types are known, register the destination variable's type so that literals
+            // assigned to that variable later (e.g. colors) can be expanded.
+            if (cleaner.Context.Settings.InlinePropagateVariableTypes &&
+                Variable is VariableNode destinationVariable && Value is VariableNode valueVariable)
+            {
+                FunctionArgTypeInference.PropagateArgumentTypeToVariableOnAssignment(cleaner, destinationVariable, valueVariable);
+            }
         }
 
         Variable = Variable.Clean(cleaner);

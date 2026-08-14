@@ -4,6 +4,7 @@
   file, You can obtain one at https://mozilla.org/MPL/2.0/.
 */
 
+using System;
 using System.Collections.Generic;
 using Underanalyzer.Decompiler.AST;
 using static Underanalyzer.IGMInstruction;
@@ -56,6 +57,14 @@ public static class FunctionArgTypeInference
 
         analyzer.VisitStatement(ast);
 
+        // Reverse inference: propagate the inferred argument types back onto variables that were
+        // assigned from those arguments, so that literals assigned to those variables (e.g. colors)
+        // can be expanded at clean time.
+        if (cleaner.Context.Settings.ReverseInferVariableTypes)
+        {
+            analyzer.RegisterInferredVariableTypes();
+        }
+
         int resultSize = analyzer.MaxReferencedArgument + 1;
         if (resultSize <= 0)
         {
@@ -82,6 +91,106 @@ public static class FunctionArgTypeInference
     }
 
     /// <summary>
+    /// Returns the argument index for the given variable node, or -1 if it is not an argument variable.
+    /// Supports both 2.3+ games (where arguments use the "argument" instance type) and pre-2.3 games
+    /// (where arguments are regular self/builtin variables named "argument0", or array accesses "argument[i]").
+    /// </summary>
+    public static int GetArgumentIndex(VariableNode node)
+    {
+        // Handle "argument0".."argument15" names (both instance type styles) and "argument[i]" with i >= 16
+        int index = node.GetArgumentIndex(MaxArgumentArrayIndex, onlyNamedArguments: false);
+        if (index != -1)
+        {
+            return index;
+        }
+
+        // Handle pre-2.3 / 2.3 "argument[i]" array accesses with a static index below 16
+        if (node.Variable.Name.Content == "argument" &&
+            node.ArrayIndices is [Int16Node { Value: >= 0 } arrayIndex, ..])
+        {
+            return arrayIndex.Value;
+        }
+
+        return -1;
+    }
+
+    /// <summary>
+    /// Returns whether the given variable node references a function argument.
+    /// </summary>
+    public static bool IsArgumentVariable(VariableNode node)
+    {
+        return GetArgumentIndex(node) != -1;
+    }
+
+    /// <summary>
+    /// Checks whether a non-local variable belongs to an unambiguous instance that inference can
+    /// propagate types to (self, global, or a plain unqualified variable), as opposed to e.g. a
+    /// variable on another instance or an array element.
+    /// </summary>
+    public static bool IsPropagatableVariable(VariableNode node)
+    {
+        if (node.ArrayIndices is not null)
+        {
+            return false;
+        }
+        return node.Left is null or InstanceTypeNode { InstanceType: InstanceType.Self or InstanceType.Global } or
+            Int16Node { Value: (short)InstanceType.Self or (short)InstanceType.Global };
+    }
+
+    /// <summary>
+    /// When a function's argument types are already known, and an argument is assigned to a
+    /// variable within the function body, registers the variable's type so that literals assigned
+    /// to it later can be expanded. Used by <see cref="AST.Nodes.AssignNode"/> at clean time.
+    /// </summary>
+    public static void PropagateArgumentTypeToVariableOnAssignment(ASTCleaner cleaner, VariableNode destination, VariableNode value)
+    {
+        int argIndex = GetArgumentIndex(value);
+        if (argIndex < 0 || !IsPropagatableVariable(destination) || IsArgumentVariable(destination))
+        {
+            return;
+        }
+        if (cleaner.TopFragmentContext?.CodeEntryName is not string codeEntryName)
+        {
+            return;
+        }
+        if (cleaner.GlobalMacroResolver is not GlobalMacroTypeResolver globalResolver)
+        {
+            return;
+        }
+        // Don't override an already-registered (potentially more specific) type
+        if (globalResolver.ResolveVariableType(cleaner, destination.Variable.Name.Content) is not null)
+        {
+            return;
+        }
+        string functionName = GetFunctionNameFromCodeEntryName(codeEntryName);
+        if (functionName is null ||
+            globalResolver.GetResolvedFunctionArgumentTypes(codeEntryName, functionName, out _) is not IMacroTypeFunctionArgs args)
+        {
+            return;
+        }
+        if (GetFunctionArgumentTypes(args) is not IMacroType?[] perArg ||
+            argIndex >= perArg.Length || perArg[argIndex] is not IMacroType argType)
+        {
+            return;
+        }
+        globalResolver.DefineVariableTypeForCodeEntry(codeEntryName, destination.Variable.Name.Content, argType);
+    }
+
+    /// <summary>
+    /// Derives the function name from a code entry name, stripping the "gml_Script_" prefix used
+    /// for script assets. Returns the entry name as-is when it doesn't match that prefix.
+    /// </summary>
+    private static string GetFunctionNameFromCodeEntryName(string codeEntryName)
+    {
+        const string prefix = "gml_Script_";
+        if (codeEntryName.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return codeEntryName[prefix.Length..];
+        }
+        return codeEntryName;
+    }
+
+    /// <summary>
     /// Internal AST analyzer that performs the actual data-flow tracking.
     /// </summary>
     private sealed class Analyzer
@@ -97,6 +206,12 @@ public static class FunctionArgTypeInference
         /// Mapping of local variable name to the set of argument indices that may currently flow into it.
         /// </summary>
         private readonly Dictionary<string, HashSet<int>> _localToArgSources = [];
+
+        /// <summary>
+        /// Mapping of non-local variable name to the set of argument indices that were assigned to it,
+        /// used for reverse propagation of inferred argument types onto variables.
+        /// </summary>
+        private readonly Dictionary<string, HashSet<int>> _variableToArgSources = [];
 
         /// <summary>
         /// The highest argument index referenced so far.
@@ -169,33 +284,83 @@ public static class FunctionArgTypeInference
             existing.UnionWith(sources);
         }
 
-        private static bool IsArgumentVariable(VariableNode node)
+        /// <summary>
+        /// Records that the given non-local variable was assigned from the given argument sources.
+        /// </summary>
+        private void RecordVariableSources(string name, HashSet<int> sources)
         {
-            return GetArgumentIndex(node) != -1;
+            if (sources.Count == 0)
+            {
+                return;
+            }
+            if (!_variableToArgSources.TryGetValue(name, out HashSet<int>? existing))
+            {
+                existing = [];
+                _variableToArgSources[name] = existing;
+            }
+            existing.UnionWith(sources);
         }
 
         /// <summary>
-        /// Returns the argument index for the given variable node, or -1 if it is not an argument variable.
-        /// Supports both 2.3+ games (where arguments use the "argument" instance type) and pre-2.3 games
-        /// (where arguments are regular self/builtin variables named "argument0", or array accesses "argument[i]").
+        /// Reverse inference: registers the inferred argument types onto variables that were assigned
+        /// from those arguments, so that literals assigned to those variables (e.g. colors) can be
+        /// expanded by the cleaner. Types are registered per code entry, and never override types
+        /// that are already registered.
         /// </summary>
-        private static int GetArgumentIndex(VariableNode node)
+        public void RegisterInferredVariableTypes()
         {
-            // Handle "argument0".."argument15" names (both instance type styles) and "argument[i]" with i >= 16
-            int index = node.GetArgumentIndex(MaxArgumentArrayIndex, onlyNamedArguments: false);
-            if (index != -1)
+            if (_cleaner.TopFragmentContext?.CodeEntryName is not string codeEntryName)
             {
-                return index;
+                return;
+            }
+            if (_cleaner.GlobalMacroResolver is not GlobalMacroTypeResolver globalResolver)
+            {
+                return;
             }
 
-            // Handle pre-2.3 / 2.3 "argument[i]" array accesses with a static index below 16
-            if (node.Variable.Name.Content == "argument" &&
-                node.ArrayIndices is [Int16Node { Value: >= 0 } arrayIndex, ..])
+            // Gather all variable assignments (locals plus non-locals) in one place
+            Dictionary<string, HashSet<int>> allSources = [];
+            foreach ((string name, HashSet<int> sources) in _localToArgSources)
             {
-                return arrayIndex.Value;
+                allSources[name] = sources;
+            }
+            foreach ((string name, HashSet<int> sources) in _variableToArgSources)
+            {
+                if (allSources.TryGetValue(name, out HashSet<int>? existing))
+                {
+                    existing.UnionWith(sources);
+                }
+                else
+                {
+                    allSources[name] = sources;
+                }
             }
 
-            return -1;
+            foreach ((string name, HashSet<int> sources) in allSources)
+            {
+                // Collect the inferred types of all argument indices assigned to this variable
+                List<IMacroType> types = [];
+                foreach (int index in sources)
+                {
+                    if (index < _argumentTypes.Count && _argumentTypes[index] is IMacroType type)
+                    {
+                        types.Add(type);
+                    }
+                }
+                if (types.Count == 0)
+                {
+                    continue;
+                }
+
+                // Don't override an already-registered (potentially more specific) type
+                if (globalResolver.ResolveVariableType(_cleaner, name) is not null)
+                {
+                    continue;
+                }
+
+                IMacroType resultType = types.Count == 1 ? types[0] : new UnionMacroType(types);
+                globalResolver.DefineVariableTypeForCodeEntry(codeEntryName, name, resultType);
+            }
         }
 
         private static bool IsLocalVariable(VariableNode node)
@@ -693,6 +858,14 @@ public static class FunctionArgTypeInference
                 _cleaner.GlobalMacroResolver.ResolveVariableType(_cleaner, destination.Variable.Name.Content) is IMacroType destinationType)
             {
                 RecordTypesForSources(valueSources, destinationType);
+                return;
+            }
+
+            // Assignment of an argument to a regular self/global variable -> track it for reverse
+            // propagation, so that literals assigned to the variable later (e.g. colors) get expanded.
+            if (IsPropagatableVariable(destination))
+            {
+                RecordVariableSources(destination.Variable.Name.Content, valueSources);
             }
         }
 

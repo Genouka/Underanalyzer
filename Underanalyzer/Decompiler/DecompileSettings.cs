@@ -140,6 +140,21 @@ public interface IDecompileSettings
     public bool InferFunctionArgumentTypes { get; }
 
     /// <summary>
+    /// If true, reverse inference is performed in addition to forward inference: the (inferred or
+    /// registered) argument types of a function are propagated back onto variables that were assigned
+    /// from those arguments, so that literals assigned to those variables (e.g. colors) can also be
+    /// expanded. Requires <see cref="InferFunctionArgumentTypes"/> to be enabled.
+    /// </summary>
+    public bool ReverseInferVariableTypes { get; }
+
+    /// <summary>
+    /// If true, when a function's argument types are already known and an argument is assigned to a
+    /// variable within that function's code, the variable's type is registered on the spot, so that
+    /// literals assigned to that variable later in the code can be expanded.
+    /// </summary>
+    public bool InlinePropagateVariableTypes { get; }
+
+    /// <summary>
     /// Base type name for the enum representing all unknown enum values.
     /// Should be a valid enum name in GML, or <see langword="null"/> if the unknown enum should not be generated/used at all.
     /// </summary>
@@ -200,6 +215,8 @@ public class DecompileSettings : IDecompileSettings
     public bool CleanupTemplateStrings { get; set; } = true;
     public bool CreateEnumDeclarations { get; set; } = true;
     public bool InferFunctionArgumentTypes { get; set; } = true;
+    public bool ReverseInferVariableTypes { get; set; } = true;
+    public bool InlinePropagateVariableTypes { get; set; } = true;
     public string UnknownEnumName { get; set; } = "UnknownEnum";
     public string UnknownEnumValuePattern { get; set; } = "Value_{0}";
     public string UnknownArgumentNamePattern { get; set; } = "arg{0}";

@@ -575,4 +575,91 @@ public class FunctionArgTypeInferenceTests
             settings
         );
     }
+
+    [Fact]
+    public void TestReversePropagateVariableTypeDisabledBySetting()
+    {
+        GameContextMock gameContext = CreateGameContext(out _);
+        DefineGlobalFunction(gameContext, "scr_set_color");
+        gameContext.GameSpecificRegistry.MacroResolver.GlobalNames.DefineFunctionArgumentsType("scr_set_color",
+            new FunctionArgsMacroType([new ColorMacroType()]));
+
+        GMCode code = VMAssembly.ParseAssemblyFromLines(
+            """
+            push.v argument.argument0
+            pop.v.i self.color
+            pushi.e 255
+            pop.v.i self.color
+            """.Split('\n'), gameContext, "gml_Script_scr_set_color");
+
+        // With inline propagation disabled, the literal must not be expanded
+        DecompileSettings settings = new()
+        {
+            InlinePropagateVariableTypes = false
+        };
+        string result = new DecompileContext(gameContext, code, settings).DecompileToString().Trim();
+        Assert.Equal("color = argument0;\ncolor = 255;", result);
+    }
+
+    [Fact]
+    public void TestReversePropagateVariableTypeFromRegisteredArgs()
+    {
+        GameContextMock gameContext = CreateGameContext(out _);
+        DefineGlobalFunction(gameContext, "scr_set_color");
+        gameContext.GameSpecificRegistry.MacroResolver.GlobalNames.DefineFunctionArgumentsType("scr_set_color",
+            new FunctionArgsMacroType([new ColorMacroType()]));
+
+        // The script body assigns its (color-typed) argument to a variable, then assigns a literal
+        // to that variable. Because the argument type is registered, the literal should be expanded.
+        GMCode code = VMAssembly.ParseAssemblyFromLines(
+            """
+            push.v argument.argument0
+            pop.v.i self.color
+            pushi.e 255
+            pop.v.i self.color
+            """.Split('\n'), gameContext, "gml_Script_scr_set_color");
+
+        string result = new DecompileContext(gameContext, code, new DecompileSettings()).DecompileToString().Trim();
+
+        Assert.Equal("color = argument0;\ncolor = c_red;", result);
+    }
+
+    [Fact]
+    public void TestReversePropagateVariableTypeFromInferredArgs()
+    {
+        GameContextMock gameContext = CreateGameContext(out MockFunctionArgTypeProvider provider);
+        gameContext.GameSpecificRegistry.MacroResolver.GlobalNames.DefineFunctionArgumentsType("draw_set_color",
+            new FunctionArgsMacroType([new ColorMacroType()]));
+        DefineGlobalFunction(gameContext, "scr_set_color");
+
+        // Body: local receives the argument, is used in a typed builtin call (inferring the argument
+        // type), and is also assigned a literal that should be expanded once the type is known.
+        provider.AddCode("scr_set_color", """
+            push.v argument.argument0
+            pop.v.i local.c
+            pushi.e 255
+            pop.v.i local.c
+            push.v local.c
+            call.i draw_set_color 1
+            popz.v
+            """, gameContext);
+
+        // (a) Decompiling a caller triggers inference, which registers the variable's type
+        TestUtil.VerifyDecompileResult(
+            """
+            pushi.e 255
+            call.i scr_set_color 1
+            popz.v
+            """,
+            """
+            scr_set_color(c_red);
+            """,
+            gameContext
+        );
+
+        // (b) The script body now expands the literal assigned to the variable
+        IGMCode bodyCode = provider.GetFunctionCode("scr_set_color");
+        string bodyResult = new DecompileContext(gameContext, bodyCode, new DecompileSettings()).DecompileToString().Trim();
+        Assert.Equal("var c = argument0;\nc = c_red;\ndraw_set_color(c);", bodyResult);
+    }
 }
