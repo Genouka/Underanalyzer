@@ -128,6 +128,24 @@ public sealed class DecompileContext
         try
         {
             AST.ASTCleaner cleaner = new(this);
+
+            // Before cleaning, attempt to infer this code entry's return type from the values it
+            // returns, so that literals flowing into the return value (e.g. "spr = 441; return spr;")
+            // can be expanded as named constants. This also runs for the internal decompiles used by
+            // argument type inference, keeping the recursive inference self-contained.
+            if (Settings.InferFunctionArgumentTypes && FragmentNodes is { Count: > 0 })
+            {
+                cleaner.PushFragmentContext(new AST.ASTFragmentContext(null, FragmentNodes[0]));
+                try
+                {
+                    GameSpecific.FunctionArgTypeInference.MaybeInferReturnValueTypes(cleaner, ast);
+                }
+                finally
+                {
+                    cleaner.PopFragmentContext();
+                }
+            }
+
             AST.IStatementNode cleaned = ast.Clean(cleaner);
             if (Settings.CreateEnumDeclarations)
             {

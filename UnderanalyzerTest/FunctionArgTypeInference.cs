@@ -21,9 +21,19 @@ public class FunctionArgTypeInferenceTests
     {
         private readonly Dictionary<string, IGMCode> _codes = [];
 
-        public void AddCode(string functionName, string assembly, GameContextMock gameContext)
+        public void AddCode(string functionName, string assembly, GameContextMock gameContext, string? codeName = null)
         {
-            _codes[functionName] = TestUtil.GetCode(assembly, gameContext);
+            if (codeName is null)
+            {
+                _codes[functionName] = TestUtil.GetCode(assembly, gameContext);
+            }
+            else
+            {
+                // Use the given code entry name (e.g. "gml_Script_..."), so that return value type
+                // inference keys on the same code entry name at clean time.
+                _codes[functionName] = VMAssembly.ParseAssemblyFromLines(
+                    assembly.Split('\n'), gameContext, codeName);
+            }
         }
 
         public IGMCode? GetFunctionCode(string functionName)
@@ -599,6 +609,173 @@ public class FunctionArgTypeInferenceTests
         };
         string result = new DecompileContext(gameContext, code, settings).DecompileToString().Trim();
         Assert.Equal("color = argument0;\ncolor = 255;", result);
+    }
+
+    [Fact]
+    public void TestInferReturnTypeFromCallSiteUsage()
+    {
+        GameContextMock gameContext = CreateGameContext(out MockFunctionArgTypeProvider provider);
+        gameContext.DefineMockAsset(AssetType.Sprite, 441, "spr_card441");
+        gameContext.DefineMockAsset(AssetType.Sprite, 440, "spr_card440");
+        DefineGlobalFunction(gameContext, "scr_get_sprite");
+        gameContext.GameSpecificRegistry.MacroResolver.GlobalNames.DefineFunctionArgumentsType("draw_sprite",
+            new FunctionArgsMacroType(
+            [
+                gameContext.GameSpecificRegistry.FindType("Asset.Sprite"),
+                null,
+                null,
+                null
+            ]));
+
+        // The function assigns sprite indices to a variable and returns it. Its return type is
+        // only known from how the function is used at a call site.
+        provider.AddCode("scr_get_sprite", """
+            pushi.e 441
+            pop.v.i local.spr
+            pushi.e 440
+            pop.v.i local.spr
+            push.v local.spr
+            ret.v
+            """, gameContext, "gml_Script_scr_get_sprite");
+
+        // (a) Decompiling a caller that uses the function at a typed (sprite) argument position
+        // registers the function's return type
+        TestUtil.VerifyDecompileResult(
+            """
+            pushi.e 0
+            conv.i.v
+            pushi.e 0
+            conv.i.v
+            pushi.e 0
+            conv.i.v
+            pushi.e 5
+            call.i scr_get_sprite 1
+            call.i draw_sprite 4
+            popz.v
+            """,
+            """
+            draw_sprite(scr_get_sprite(5), 0, 0, 0);
+            """,
+            gameContext
+        );
+
+        // (b) The function body now expands the literals assigned to the returned variable
+        IGMCode bodyCode = provider.GetFunctionCode("scr_get_sprite")!;
+        string bodyResult = new DecompileContext(gameContext, bodyCode, new DecompileSettings()).DecompileToString().Trim();
+        Assert.Equal("var spr = spr_card441;\nspr = spr_card440;\nreturn spr;", bodyResult);
+    }
+
+    [Fact]
+    public void TestInferReturnTypeFromEqualityComparison()
+    {
+        GameContextMock gameContext = CreateGameContext(out MockFunctionArgTypeProvider provider);
+        gameContext.DefineMockAsset(AssetType.Sprite, 12, "sprWatered");
+        gameContext.DefineMockAsset(AssetType.Sprite, 441, "spr_card441");
+        DefineGlobalFunction(gameContext, "scr_card_type");
+
+        // The function returns a sprite index stored in a variable; its return type is inferred
+        // from a caller comparing the result against a sprite asset reference.
+        provider.AddCode("scr_card_type", """
+            pushi.e 441
+            pop.v.i local.spr
+            push.v local.spr
+            ret.v
+            """, gameContext, "gml_Script_scr_card_type");
+
+        // (a) Decompiling a caller with "scr_card_type(...) == sprWatered" registers the return type
+        TestUtil.VerifyDecompileResult(
+            """
+            :[0]
+            pushi.e 5
+            call.i scr_card_type 1
+            pushref.i 12 Sprite
+            cmp.i.v EQ
+            bf [1]
+
+            :[1]
+            """,
+            """
+            if (scr_card_type(5) == sprWatered)
+            {
+            }
+            """,
+            gameContext
+        );
+
+        // (b) The function body now expands the returned sprite index
+        IGMCode bodyCode = provider.GetFunctionCode("scr_card_type")!;
+        string bodyResult = new DecompileContext(gameContext, bodyCode, new DecompileSettings()).DecompileToString().Trim();
+        Assert.Equal("var spr = spr_card441;\nreturn spr;", bodyResult);
+    }
+
+    [Fact]
+    public void TestNoReturnTypeInferenceForBuiltinFunctions()
+    {
+        GameContextMock gameContext = CreateGameContext(out MockFunctionArgTypeProvider provider);
+        gameContext.DefineMockAsset(AssetType.Sprite, 1, "spr_enemy");
+        gameContext.GameSpecificRegistry.MacroResolver.GlobalNames.DefineFunctionArgumentsType("draw_sprite",
+            new FunctionArgsMacroType(
+            [
+                gameContext.GameSpecificRegistry.FindType("Asset.Sprite"),
+                null,
+                null,
+                null
+            ]));
+
+        // "random" is not a user function (not registered with the provider), so its return type
+        // must NOT be inferred when used at a typed argument position.
+        TestUtil.VerifyDecompileResult(
+            """
+            pushi.e 0
+            conv.i.v
+            pushi.e 0
+            conv.i.v
+            pushi.e 0
+            conv.i.v
+            pushi.e 100
+            call.i random 1
+            call.i draw_sprite 4
+            popz.v
+            """,
+            """
+            draw_sprite(random(100), 0, 0, 0);
+            """,
+            gameContext
+        );
+
+        // Only the return type inference for builtins must be skipped
+        Assert.Null(((GlobalMacroTypeResolver)gameContext.GameSpecificRegistry.MacroResolver).
+            GlobalNames.TryGetFunctionReturnType("random"));
+    }
+
+    [Fact]
+    public void TestInferReturnTypeDisabledBySetting()
+    {
+        GameContextMock gameContext = CreateGameContext(out _);
+        gameContext.DefineMockAsset(AssetType.Sprite, 441, "spr_card441");
+        gameContext.DefineMockAsset(AssetType.Sprite, 440, "spr_card440");
+
+        DecompileSettings settings = new()
+        {
+            InferFunctionArgumentTypes = false
+        };
+        TestUtil.VerifyDecompileResult(
+            """
+            pushi.e 441
+            pop.v.i local.spr
+            pushi.e 440
+            pop.v.i local.spr
+            push.v local.spr
+            ret.v
+            """,
+            """
+            var spr = 441;
+            spr = 440;
+            return spr;
+            """,
+            gameContext,
+            settings
+        );
     }
 
     [Fact]

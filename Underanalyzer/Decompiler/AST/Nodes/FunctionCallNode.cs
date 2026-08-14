@@ -330,6 +330,12 @@ public class FunctionCallNode(IGMFunction function, List<IExpressionNode> argume
             return conditional.Resolve(cleaner, this);
         }
 
+        // When this function call is used in a context that expects a specific macro type (for
+        // example a nested call at a typed argument position, or an assignment to a typed variable),
+        // infer this function's return type from that context. This is only done for user functions
+        // (see FunctionArgTypeInference.InferReturnTypeFromCallSiteUsage).
+        FunctionArgTypeInference.InferReturnTypeFromCallSiteUsage(cleaner, this, type);
+
         // For choose(...), propagate type to all parameters
         if (Function.Name.Content == VMConstants.ChooseFunction)
         {

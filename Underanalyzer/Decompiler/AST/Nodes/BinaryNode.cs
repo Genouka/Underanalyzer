@@ -98,6 +98,21 @@ public class BinaryNode : IMultiExpressionNode, IMacroResolvableNode, ICondition
             Left = leftResolved;
         }
 
+        // Infer the return types of nested function calls from the typed constants they are compared
+        // against (e.g. "card_get_sprite(type) == sprWatered"). Asset references do not implement
+        // IMacroTypeNode, so they are not handled by the resolution above.
+        if (Instruction.Kind == Opcode.Compare)
+        {
+            if (Left is FunctionCallNode leftCall && GetTypedConstantType(Right) is IMacroType rightConstantType)
+            {
+                FunctionArgTypeInference.InferReturnTypeFromCallSiteUsage(cleaner, leftCall, rightConstantType);
+            }
+            else if (Right is FunctionCallNode rightCall && GetTypedConstantType(Left) is IMacroType leftConstantType)
+            {
+                FunctionArgTypeInference.InferReturnTypeFromCallSiteUsage(cleaner, rightCall, leftConstantType);
+            }
+        }
+
         // Check whether left/right sides need to have parentheses added (grouped)
         CheckGroup(Left);
         CheckGroup(Right);
@@ -125,6 +140,18 @@ public class BinaryNode : IMultiExpressionNode, IMacroResolvableNode, ICondition
         Left = Left.PostClean(cleaner);
         Right = Right.PostClean(cleaner);
         return this;
+    }
+
+    /// <summary>
+    /// Returns the macro type of a typed constant expression, if it can be determined.
+    /// </summary>
+    private static IMacroType? GetTypedConstantType(IExpressionNode expression)
+    {
+        if (expression is AssetReferenceNode assetReference)
+        {
+            return new AssetMacroType(assetReference.AssetType);
+        }
+        return null;
     }
 
     /// <inheritdoc/>

@@ -6,6 +6,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Underanalyzer.Decompiler.AST;
 using static Underanalyzer.IGMInstruction;
 
@@ -135,6 +136,272 @@ public static class FunctionArgTypeInference
         }
         return node.Left is null or InstanceTypeNode { InstanceType: InstanceType.Self or InstanceType.Global } or
             Int16Node { Value: (short)InstanceType.Self or (short)InstanceType.Global };
+    }
+
+    /// <summary>
+    /// Lightweight pass that registers the types of the variables returned by the current function,
+    /// based on the function's return type. The return type is only ever derived from reliable
+    /// sources: a return type that is already registered (e.g. inferred from call-site usage, or from
+    /// game data), or the registered type of a returned variable (e.g. <c>sprite_index</c>). This
+    /// allows literals that flow into the return value (e.g. <c>spr = 441; return spr;</c>) to be
+    /// expanded as named constants. Functions that are returned directly are linked recursively.
+    /// </summary>
+    public static void MaybeInferReturnValueTypes(ASTCleaner cleaner, IStatementNode ast)
+    {
+        if (cleaner.TopFragmentContext?.CodeEntryName is not string codeEntryName)
+        {
+            return;
+        }
+        if (cleaner.GlobalMacroResolver is not GlobalMacroTypeResolver globalResolver)
+        {
+            return;
+        }
+
+        List<IExpressionNode> returns = [];
+        Dictionary<string, List<IExpressionNode>> variableAssignments = [];
+        List<string> linkedFunctions = [];
+        CollectReturnInfo(ast, returns, variableAssignments, linkedFunctions);
+
+        if (returns.Count == 0)
+        {
+            return;
+        }
+
+        string? functionName = GetFunctionNameFromCodeEntryName(codeEntryName);
+        if (functionName is null)
+        {
+            return;
+        }
+
+        // The return type is taken from a registered return type, or from the registered type of a
+        // returned variable (e.g. "return sprite_index;")
+        IMacroType? returnType = globalResolver.GlobalNames.TryGetFunctionReturnType(functionName)
+                                 ?? globalResolver.GlobalNames.TryGetFunctionReturnType(codeEntryName);
+        if (returnType is null)
+        {
+            returnType = InferReturnTypeFromReturnedVariableTypes(cleaner, returns);
+        }
+        if (returnType is null)
+        {
+            return;
+        }
+
+        // Register the function's return type under both the bare function name (for call sites)
+        // and the code entry name form (for "return" statements in the body itself)
+        RegisterFunctionReturnType(globalResolver, functionName, returnType);
+        if (!string.Equals(functionName, codeEntryName, StringComparison.Ordinal))
+        {
+            RegisterFunctionReturnType(globalResolver, codeEntryName, returnType);
+        }
+
+        // Register the types of the variables that are returned, so that literals assigned to them
+        // (e.g. "spr = 441") are expanded at clean time
+        foreach (IExpressionNode value in returns)
+        {
+            if (value is VariableNode variable && !IsArgumentVariable(variable))
+            {
+                string variableName = variable.Variable.Name.Content;
+                if (globalResolver.ResolveVariableType(cleaner, variableName) is null)
+                {
+                    globalResolver.DefineVariableTypeForCodeEntry(codeEntryName, variableName, returnType);
+                }
+            }
+        }
+
+        // Recursively link functions that are directly returned (or assigned to a returned variable)
+        foreach (string linkedFunction in linkedFunctions)
+        {
+            if (!IsReturnTypeRegistered(globalResolver, linkedFunction))
+            {
+                RegisterFunctionReturnType(globalResolver, linkedFunction, returnType);
+                RegisterFunctionReturnType(globalResolver, "gml_Script_" + linkedFunction, returnType);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Derives a function's return type from the registered types of the variables it returns
+    /// (e.g. <c>return sprite_index;</c>), requiring all returned variables to agree.
+    /// </summary>
+    private static IMacroType? InferReturnTypeFromReturnedVariableTypes(ASTCleaner cleaner, List<IExpressionNode> returns)
+    {
+        IMacroType? candidate = null;
+        foreach (IExpressionNode value in returns)
+        {
+            if (value is not VariableNode variable)
+            {
+                continue;
+            }
+            IMacroType? variableType = cleaner.GlobalMacroResolver.ResolveVariableType(cleaner, variable.Variable.Name.Content);
+            if (variableType is null)
+            {
+                continue;
+            }
+            if (candidate is null)
+            {
+                candidate = variableType;
+            }
+            else if (!SameMacroType(candidate, variableType))
+            {
+                return null;
+            }
+        }
+        return candidate;
+    }
+
+    /// <summary>
+    /// When a function call is used in a context that expects a specific macro type (for example a
+    /// nested call at a typed argument position of another function, an assignment to a typed
+    /// variable, or a comparison against a typed constant), infers that function's return type.
+    /// This is the reliable source of return type information.
+    /// </summary>
+    public static void InferReturnTypeFromCallSiteUsage(ASTCleaner cleaner, IExpressionNode call, IMacroType usedAsType)
+    {
+        if (cleaner.GlobalMacroResolver is not GlobalMacroTypeResolver globalResolver)
+        {
+            return;
+        }
+        if (usedAsType is null)
+        {
+            return;
+        }
+        if (!cleaner.Context.Settings.InferFunctionArgumentTypes)
+        {
+            return;
+        }
+        string? functionName = call switch
+        {
+            FunctionCallNode functionCall => functionCall.FunctionName,
+            VariableCallNode variableCall => variableCall.FunctionName,
+            NewObjectNode newObject => newObject.FunctionName,
+            _ => null
+        };
+        if (string.IsNullOrEmpty(functionName))
+        {
+            return;
+        }
+        // Only infer return types for user-defined functions. Builtin functions (e.g. "random")
+        // must never be registered based on call-site usage, otherwise unrelated literals would be
+        // wrongly expanded as named constants.
+        if (cleaner.Context.GameContext.FunctionArgTypeProvider?.GetFunctionCode(functionName) is null)
+        {
+            return;
+        }
+        if (IsReturnTypeRegistered(globalResolver, functionName))
+        {
+            return;
+        }
+        RegisterFunctionReturnType(globalResolver, functionName, usedAsType);
+        if (!functionName.StartsWith("gml_Script_", StringComparison.Ordinal))
+        {
+            RegisterFunctionReturnType(globalResolver, "gml_Script_" + functionName, usedAsType);
+        }
+    }
+
+    /// <summary>
+    /// Recursively walks the given AST, collecting the values returned by the current function
+    /// (following the compiler-generated return temporary variable), as well as the literal/call
+    /// values assigned to each variable, and any functions returned directly.
+    /// </summary>
+    private static void CollectReturnInfo(IStatementNode statement, List<IExpressionNode> returns,
+                                          Dictionary<string, List<IExpressionNode>> variableAssignments,
+                                          List<string> linkedFunctions)
+    {
+        switch (statement)
+        {
+            case ReturnNode returnNode:
+                {
+                    // If the returned value is the compiler's temporary return variable, it is
+                    // handled through the assignment that produces it (below); otherwise treat the
+                    // returned value directly as a return expression.
+                    if (returnNode.Value is VariableNode { Variable.Name.Content: VMConstants.TempReturnVariable })
+                    {
+                        break;
+                    }
+                    returns.Add(returnNode.Value);
+                    if (returnNode.Value is FunctionCallNode call)
+                    {
+                        linkedFunctions.Add(call.FunctionName);
+                    }
+                    break;
+                }
+            case FunctionDeclNode:
+                {
+                    // Do not descend into nested function declarations; they have their own return values
+                    break;
+                }
+            case AssignNode assign when assign.AssignKind == AssignNode.AssignType.Normal &&
+                                     assign.Value is not null &&
+                                     assign.Variable is VariableNode destVariable:
+                {
+                    if (destVariable.Variable.Name.Content == VMConstants.TempReturnVariable)
+                    {
+                        // Assignment producing the returned value: the assigned expression is what
+                        // this function returns
+                        returns.Add(assign.Value);
+                        if (assign.Value is FunctionCallNode call)
+                        {
+                            linkedFunctions.Add(call.FunctionName);
+                        }
+                    }
+                    else
+                    {
+                        // Track concrete values assigned to each variable, so that variables that
+                        // flow into the return value can be analyzed
+                        if (!variableAssignments.TryGetValue(destVariable.Variable.Name.Content, out List<IExpressionNode>? list))
+                        {
+                            list = [];
+                            variableAssignments[destVariable.Variable.Name.Content] = list;
+                        }
+                        list.Add(assign.Value);
+                        if (assign.Value is FunctionCallNode call)
+                        {
+                            linkedFunctions.Add(call.FunctionName);
+                        }
+                    }
+                    break;
+                }
+        }
+
+        // Walk child statements, but not into nested function declarations
+        foreach (IBaseASTNode child in statement.EnumerateChildren())
+        {
+            if (child is IStatementNode childStatement && childStatement is not FunctionDeclNode)
+            {
+                CollectReturnInfo(childStatement, returns, variableAssignments, linkedFunctions);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Returns whether the given function already has a registered return type in global names.
+    /// </summary>
+    private static bool IsReturnTypeRegistered(GlobalMacroTypeResolver resolver, string functionName)
+    {
+        return resolver.GlobalNames.TryGetFunctionReturnType(functionName) is not null;
+    }
+
+    /// <summary>
+    /// Registers the given function's return type in global names, unless one is already registered.
+    /// </summary>
+    private static void RegisterFunctionReturnType(GlobalMacroTypeResolver resolver, string functionName, IMacroType type)
+    {
+        if (resolver.GlobalNames.TryGetFunctionReturnType(functionName) is null)
+        {
+            resolver.GlobalNames.DefineFunctionReturnType(functionName, type);
+        }
+    }
+
+    /// <summary>
+    /// Compares whether two macro types are the "same" for consensus purposes.
+    /// </summary>
+    private static bool SameMacroType(IMacroType a, IMacroType b)
+    {
+        if (ReferenceEquals(a, b))
+        {
+            return true;
+        }
+        return a is AssetMacroType assetA && b is AssetMacroType assetB && assetA.Type == assetB.Type;
     }
 
     /// <summary>
