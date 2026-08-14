@@ -481,6 +481,13 @@ public static class FunctionArgTypeInference
         private readonly Dictionary<string, HashSet<int>> _variableToArgSources = [];
 
         /// <summary>
+        /// Mapping of variable name to the macro types of the positions it is used at, used to infer
+        /// a variable's type from its own usage (e.g. a local variable passed to a sprite-typed
+        /// function argument, like <c>draw_sprite_ext(fire_spr, ...)</c>).
+        /// </summary>
+        private readonly Dictionary<string, List<IMacroType>> _variableUsageTypes = [];
+
+        /// <summary>
         /// The highest argument index referenced so far.
         /// </summary>
         public int MaxReferencedArgument { get; private set; } = -1;
@@ -552,7 +559,7 @@ public static class FunctionArgTypeInference
         }
 
         /// <summary>
-        /// Records that the given non-local variable was assigned from the given argument sources.
+        /// Records that the given variable is assigned from the given argument sources.
         /// </summary>
         private void RecordVariableSources(string name, HashSet<int> sources)
         {
@@ -566,6 +573,44 @@ public static class FunctionArgTypeInference
                 _variableToArgSources[name] = existing;
             }
             existing.UnionWith(sources);
+        }
+
+        /// <summary>
+        /// Records that the given expression is used as the given macro type, if the expression is a
+        /// simple non-argument variable that a type can be safely inferred for.
+        /// </summary>
+        private void RecordVariableUsageType(IExpressionNode expression, IMacroType type)
+        {
+            if (expression is VariableNode variable && IsSimpleVariable(variable))
+            {
+                if (type is IMacroTypeConditional)
+                {
+                    // Contextual types (e.g. unions with conditionals) are not reliable enough to use
+                    // as a variable's inferred type
+                    return;
+                }
+                if (!_variableUsageTypes.TryGetValue(variable.Variable.Name.Content, out List<IMacroType>? list))
+                {
+                    list = [];
+                    _variableUsageTypes[variable.Variable.Name.Content] = list;
+                }
+                list.Add(type);
+            }
+        }
+
+        /// <summary>
+        /// Returns whether the given variable is a simple self/global/local variable that a type can
+        /// be inferred for (as opposed to a variable on another instance, or an array element).
+        /// </summary>
+        private static bool IsSimpleVariable(VariableNode node)
+        {
+            if (node.ArrayIndices is not null)
+            {
+                return false;
+            }
+            return node.Left is null or
+                InstanceTypeNode { InstanceType: InstanceType.Self or InstanceType.Global or InstanceType.Local } or
+                Int16Node { Value: (short)InstanceType.Self or (short)InstanceType.Global };
         }
 
         /// <summary>
@@ -627,6 +672,38 @@ public static class FunctionArgTypeInference
 
                 IMacroType resultType = types.Count == 1 ? types[0] : new UnionMacroType(types);
                 globalResolver.DefineVariableTypeForCodeEntry(codeEntryName, name, resultType);
+            }
+
+            // Infer variable types from their usage at typed positions (e.g. a local variable passed
+            // to a sprite-typed function argument, like "fire_spr = 496" used in draw_sprite_ext),
+            // so that literals assigned to those variables can be expanded. All recorded usage types
+            // must agree for the type to be registered.
+            foreach ((string name, List<IMacroType> types) in _variableUsageTypes)
+            {
+                // Don't override an already-registered (potentially more specific) type
+                if (globalResolver.ResolveVariableType(_cleaner, name) is not null)
+                {
+                    continue;
+                }
+
+                IMacroType? resultType = null;
+                bool consistent = true;
+                foreach (IMacroType type in types)
+                {
+                    if (resultType is null)
+                    {
+                        resultType = type;
+                    }
+                    else if (!SameMacroType(resultType, type))
+                    {
+                        consistent = false;
+                        break;
+                    }
+                }
+                if (consistent && resultType is not null)
+                {
+                    globalResolver.DefineVariableTypeForCodeEntry(codeEntryName, name, resultType);
+                }
             }
         }
 
@@ -739,9 +816,13 @@ public static class FunctionArgTypeInference
                         {
                             if (child is SwitchCaseNode switchCase && switchCase.Expression is not null)
                             {
-                                if (GetConstantType(switchCase.Expression) is IMacroType caseType && switchSources.Count > 0)
+                                if (GetConstantType(switchCase.Expression) is IMacroType caseType)
                                 {
-                                    RecordTypesForSources(switchSources, caseType);
+                                    if (switchSources.Count > 0)
+                                    {
+                                        RecordTypesForSources(switchSources, caseType);
+                                    }
+                                    RecordVariableUsageType(switchNode.Expression, caseType);
                                 }
                             }
                         }
@@ -891,13 +972,18 @@ public static class FunctionArgTypeInference
 
             for (int i = 0; i < functionCall.Arguments.Count; i++)
             {
-                HashSet<int> sources = VisitExpression(functionCall.Arguments[i]);
+                IExpressionNode arg = functionCall.Arguments[i];
+                HashSet<int> sources = VisitExpression(arg);
                 if (argTypes is not null && i >= argsStart)
                 {
                     int typeIndex = i - argsStart;
-                    if (typeIndex < argTypes.Length && argTypes[typeIndex] is IMacroType type && sources.Count > 0)
+                    if (typeIndex < argTypes.Length && argTypes[typeIndex] is IMacroType type)
                     {
-                        RecordTypesForSources(sources, type);
+                        if (sources.Count > 0)
+                        {
+                            RecordTypesForSources(sources, type);
+                        }
+                        RecordVariableUsageType(arg, type);
                     }
                 }
             }
@@ -932,12 +1018,17 @@ public static class FunctionArgTypeInference
 
             for (int i = 0; i < newObject.Arguments.Count; i++)
             {
-                HashSet<int> sources = VisitExpression(newObject.Arguments[i]);
+                IExpressionNode arg = newObject.Arguments[i];
+                HashSet<int> sources = VisitExpression(arg);
                 if (argTypes is not null)
                 {
-                    if (i < argTypes.Length && argTypes[i] is IMacroType type && sources.Count > 0)
+                    if (i < argTypes.Length && argTypes[i] is IMacroType type)
                     {
-                        RecordTypesForSources(sources, type);
+                        if (sources.Count > 0)
+                        {
+                            RecordTypesForSources(sources, type);
+                        }
+                        RecordVariableUsageType(arg, type);
                     }
                 }
             }
@@ -1079,6 +1170,14 @@ public static class FunctionArgTypeInference
                 {
                     RecordTypesForSources(rightSources, leftType);
                 }
+                if (GetConstantType(binary.Right) is IMacroType rightUsageType)
+                {
+                    RecordVariableUsageType(binary.Left, rightUsageType);
+                }
+                if (GetConstantType(binary.Left) is IMacroType leftUsageType)
+                {
+                    RecordVariableUsageType(binary.Right, leftUsageType);
+                }
             }
         }
 
@@ -1125,6 +1224,7 @@ public static class FunctionArgTypeInference
                 _cleaner.GlobalMacroResolver.ResolveVariableType(_cleaner, destination.Variable.Name.Content) is IMacroType destinationType)
             {
                 RecordTypesForSources(valueSources, destinationType);
+                RecordVariableUsageType(assign.Value, destinationType);
                 return;
             }
 

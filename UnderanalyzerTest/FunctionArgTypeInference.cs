@@ -779,6 +779,111 @@ public class FunctionArgTypeInferenceTests
     }
 
     [Fact]
+    public void TestInferVariableTypeFromUsage()
+    {
+        GameContextMock gameContext = CreateGameContext(out _);
+        gameContext.DefineMockAsset(AssetType.Sprite, 496, "spr_fire_small");
+        gameContext.DefineMockAsset(AssetType.Sprite, 518, "spr_fire_cursed");
+        gameContext.GameSpecificRegistry.MacroResolver.GlobalNames.DefineFunctionArgumentsType("draw_sprite_ext",
+            new FunctionArgsMacroType(
+            [
+                gameContext.GameSpecificRegistry.FindType("Asset.Sprite"),
+                null, null, null, null, null, null, null, null
+            ]));
+
+        // A local variable is assigned sprite-index literals and used at a sprite-typed argument
+        // position; its type is inferred from that usage, expanding the literals. This runs even on
+        // a direct decompile of the script body (no caller triggering inference first).
+        TestUtil.VerifyDecompileResult(
+            """
+            pushi.e 496
+            pop.v.i local.fire_spr
+            pushi.e 0
+            conv.i.v
+            pushi.e 0
+            conv.i.v
+            pushi.e 0
+            conv.i.v
+            pushi.e 0
+            conv.i.v
+            pushi.e 0
+            conv.i.v
+            pushi.e 0
+            conv.i.v
+            pushi.e 0
+            conv.i.v
+            pushi.e 0
+            conv.i.v
+            push.v local.fire_spr
+            call.i draw_sprite_ext 9
+            popz.v
+            """,
+            """
+            var fire_spr = spr_fire_small;
+            draw_sprite_ext(fire_spr, 0, 0, 0, 0, 0, 0, 0, 0);
+            """,
+            gameContext
+        );
+    }
+
+    [Fact]
+    public void TestInferVariableTypeFromUsageConflictsAreSkipped()
+    {
+        GameContextMock gameContext = CreateGameContext(out _);
+        gameContext.DefineMockAsset(AssetType.Sprite, 496, "spr_fire_small");
+        gameContext.GameSpecificRegistry.MacroResolver.GlobalNames.DefineFunctionArgumentsType("draw_sprite_ext",
+            new FunctionArgsMacroType(
+            [
+                gameContext.GameSpecificRegistry.FindType("Asset.Sprite"),
+                null, null, null, null, null, null, null, null
+            ]));
+        gameContext.DefineMockAsset(AssetType.Object, 12, "obj_enemy");
+        gameContext.GameSpecificRegistry.MacroResolver.GlobalNames.DefineFunctionArgumentsType("instance_create",
+            new FunctionArgsMacroType([null, null, gameContext.GameSpecificRegistry.FindType("Asset.Object")]));
+
+        // The variable is used at BOTH a sprite-typed and an object-typed position; with conflicting
+        // usage types, no type is inferred and the literal must NOT be expanded.
+        TestUtil.VerifyDecompileResult(
+            """
+            pushi.e 496
+            pop.v.i local.thing
+            push.v local.thing
+            pushi.e 64
+            conv.i.v
+            pushi.e 0
+            conv.i.v
+            call.i instance_create 3
+            popz.v
+            pushi.e 0
+            conv.i.v
+            pushi.e 0
+            conv.i.v
+            pushi.e 0
+            conv.i.v
+            pushi.e 0
+            conv.i.v
+            pushi.e 0
+            conv.i.v
+            pushi.e 0
+            conv.i.v
+            pushi.e 0
+            conv.i.v
+            pushi.e 0
+            conv.i.v
+            push.v local.thing
+            call.i draw_sprite_ext 9
+            popz.v
+            """,
+            """
+            var thing = 496;
+            instance_create(0, 64, thing);
+            draw_sprite_ext(thing, 0, 0, 0, 0, 0, 0, 0, 0);
+            """,
+            gameContext
+        );
+    }
+
+    [Fact]
     public void TestReversePropagateVariableTypeFromRegisteredArgs()
     {
         GameContextMock gameContext = CreateGameContext(out _);

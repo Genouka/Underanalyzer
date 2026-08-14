@@ -139,6 +139,15 @@ public sealed class DecompileContext
                 try
                 {
                     GameSpecific.FunctionArgTypeInference.MaybeInferReturnValueTypes(cleaner, ast);
+                    if (Settings.ReverseInferVariableTypes)
+                    {
+                        // Infer this code entry's variable types from their own usage (e.g. a local
+                        // passed to a sprite-typed argument, like "fire_spr = 496; draw_sprite_ext(fire_spr, ...)").
+                        // Running this on the entry itself (rather than only when a caller triggers
+                        // argument inference) keeps it self-contained, so literals assigned to such
+                        // variables are expanded even on a direct decompile.
+                        GameSpecific.FunctionArgTypeInference.Infer(cleaner, ast, Code);
+                    }
                 }
                 finally
                 {
