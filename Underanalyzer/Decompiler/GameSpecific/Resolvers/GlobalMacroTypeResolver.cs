@@ -4,6 +4,7 @@
   file, You can obtain one at https://mozilla.org/MPL/2.0/.
 */
 
+using System;
 using System.Collections.Generic;
 using Underanalyzer.Decompiler.AST;
 
@@ -21,12 +22,20 @@ public class GlobalMacroTypeResolver : IMacroTypeResolver
     private Dictionary<string, NameMacroTypeResolver> CodeEntryNames { get; }
 
     /// <summary>
+    /// Lookup of object name to a name resolver, used to share instance variable types across the
+    /// events of the same object (e.g. a variable used as a sprite in the Draw event, whose literals
+    /// assigned in the Create event can then be expanded).
+    /// </summary>
+    private Dictionary<string, NameMacroTypeResolver> ObjectNames { get; }
+
+    /// <summary>
     /// Initializes an empty global macro resolver.
     /// </summary>
     public GlobalMacroTypeResolver()
     {
         GlobalNames = new NameMacroTypeResolver();
         CodeEntryNames = [];
+        ObjectNames = [];
     }
 
     /// <summary>
@@ -51,6 +60,24 @@ public class GlobalMacroTypeResolver : IMacroTypeResolver
         resolver.DefineVariableType(variableName, type);
     }
 
+    /// <summary>
+    /// Defines a variable's macro type for the given object, creating a name resolver for that object
+    /// if one does not already exist. Used to share instance variable types across an object's events.
+    /// Types already defined for the object are never overwritten.
+    /// </summary>
+    public void DefineVariableTypeForObject(string objectName, string variableName, IMacroType? type)
+    {
+        if (!ObjectNames.TryGetValue(objectName, out NameMacroTypeResolver? resolver))
+        {
+            resolver = new NameMacroTypeResolver();
+            ObjectNames[objectName] = resolver;
+        }
+        if (resolver.ResolveVariableType(null!, variableName) is null)
+        {
+            resolver.DefineVariableType(variableName, type);
+        }
+    }
+
     public IMacroType? ResolveVariableType(ASTCleaner cleaner, string? variableName)
     {
         if (variableName is null)
@@ -58,12 +85,29 @@ public class GlobalMacroTypeResolver : IMacroTypeResolver
             return null;
         }
 
-        if (CodeEntryNames.TryGetValue(cleaner.TopFragmentContext!.CodeEntryName!, out NameMacroTypeResolver? resolver))
+        string? codeEntryName = cleaner.TopFragmentContext?.CodeEntryName;
+        if (codeEntryName is not null)
         {
-            IMacroType? resolved = resolver.ResolveVariableType(cleaner, variableName);
-            if (resolved is not null)
+            if (CodeEntryNames.TryGetValue(codeEntryName, out NameMacroTypeResolver? resolver))
             {
-                return resolved;
+                IMacroType? resolved = resolver.ResolveVariableType(cleaner, variableName);
+                if (resolved is not null)
+                {
+                    return resolved;
+                }
+            }
+
+            // Fall back to the object-wide namespace, so that instance variables can share their
+            // types across events of the same object (e.g. inferred in the Draw event, used in the
+            // Create event)
+            if (GetObjectNameFromCodeEntryName(codeEntryName) is string objectName &&
+                ObjectNames.TryGetValue(objectName, out NameMacroTypeResolver? objectResolver))
+            {
+                IMacroType? resolved = objectResolver.ResolveVariableType(cleaner, variableName);
+                if (resolved is not null)
+                {
+                    return resolved;
+                }
             }
         }
 
@@ -169,6 +213,46 @@ public class GlobalMacroTypeResolver : IMacroTypeResolver
     private readonly object _inferLock = new();
     private readonly Dictionary<string, IMacroType?> _inferredFunctionArguments = [];
     private readonly HashSet<string> _inferringFunctionArguments = [];
+
+    /// <summary>
+    /// Returns the object name that an object event code entry belongs to, or <see langword="null"/>
+    /// if the code entry name does not correspond to an object event. Object event code entries use
+    /// the naming convention <c>gml_Object_&lt;object&gt;_&lt;event&gt;_&lt;subtype&gt;</c>.
+    /// </summary>
+    public static string? GetObjectNameFromCodeEntryName(string codeEntryName)
+    {
+        const string prefix = "gml_Object_";
+        if (!codeEntryName.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return null;
+        }
+        string rest = codeEntryName[prefix.Length..];
+        int bestIndex = -1;
+        int bestLength = 0;
+        foreach (string eventName in ObjectEventNames)
+        {
+            int index = rest.LastIndexOf("_" + eventName + "_", StringComparison.Ordinal);
+            if (index > bestIndex)
+            {
+                bestIndex = index;
+                bestLength = eventName.Length;
+            }
+        }
+        if (bestIndex <= 0 || bestIndex + bestLength + 2 >= rest.Length)
+        {
+            return null;
+        }
+        return rest[..bestIndex];
+    }
+
+    /// <summary>
+    /// Known object event names used in code entry names (e.g. "gml_Object_obj_Step_0").
+    /// </summary>
+    private static readonly string[] ObjectEventNames =
+    [
+        "KeyRelease", "KeyPress", "PreCreate", "Collision", "Destroy", "CleanUp",
+        "Keyboard", "Trigger", "Create", "Alarm", "Step", "Mouse", "Gesture", "Other", "Draw"
+    ];
 
     /// <summary>
     /// Attempts to infer the argument types of the given function by decompiling and analyzing its code.

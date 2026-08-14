@@ -488,6 +488,13 @@ public static class FunctionArgTypeInference
         private readonly Dictionary<string, List<IMacroType>> _variableUsageTypes = [];
 
         /// <summary>
+        /// Names of simple instance variables (self/unqualified, not local or global) that had types
+        /// assigned from usage or arguments. These types are also registered per-object, so they can
+        /// be shared across the events of the same object.
+        /// </summary>
+        private readonly HashSet<string> _instanceVariableNames = [];
+
+        /// <summary>
         /// The highest argument index referenced so far.
         /// </summary>
         public int MaxReferencedArgument { get; private set; } = -1;
@@ -589,13 +596,44 @@ public static class FunctionArgTypeInference
                     // as a variable's inferred type
                     return;
                 }
-                if (!_variableUsageTypes.TryGetValue(variable.Variable.Name.Content, out List<IMacroType>? list))
+                string name = variable.Variable.Name.Content;
+                if (!_variableUsageTypes.TryGetValue(name, out List<IMacroType>? list))
                 {
                     list = [];
-                    _variableUsageTypes[variable.Variable.Name.Content] = list;
+                    _variableUsageTypes[name] = list;
                 }
                 list.Add(type);
+                if (IsInstanceVariableForSharing(variable))
+                {
+                    _instanceVariableNames.Add(name);
+                }
             }
+        }
+
+        /// <summary>
+        /// Records that the given destination variable (assigned from arguments) is a simple instance
+        /// variable whose type can be shared across the object's events.
+        /// </summary>
+        private void RecordInstanceVariableForSharing(VariableNode destination)
+        {
+            if (IsInstanceVariableForSharing(destination))
+            {
+                _instanceVariableNames.Add(destination.Variable.Name.Content);
+            }
+        }
+
+        /// <summary>
+        /// Returns whether the given variable is a simple instance variable (self or unqualified, not
+        /// local and not global) whose type can be shared across the events of the same object.
+        /// </summary>
+        private static bool IsInstanceVariableForSharing(VariableNode node)
+        {
+            if (!IsPropagatableVariable(node))
+            {
+                return false;
+            }
+            return node.Left is not (InstanceTypeNode { InstanceType: InstanceType.Global } or
+                                     Int16Node { Value: (short)InstanceType.Global });
         }
 
         /// <summary>
@@ -672,6 +710,7 @@ public static class FunctionArgTypeInference
 
                 IMacroType resultType = types.Count == 1 ? types[0] : new UnionMacroType(types);
                 globalResolver.DefineVariableTypeForCodeEntry(codeEntryName, name, resultType);
+                RegisterInstanceVariableTypeForObject(globalResolver, codeEntryName, name, resultType);
             }
 
             // Infer variable types from their usage at typed positions (e.g. a local variable passed
@@ -703,7 +742,21 @@ public static class FunctionArgTypeInference
                 if (consistent && resultType is not null)
                 {
                     globalResolver.DefineVariableTypeForCodeEntry(codeEntryName, name, resultType);
+                    RegisterInstanceVariableTypeForObject(globalResolver, codeEntryName, name, resultType);
                 }
+            }
+        }
+
+        /// <summary>
+        /// Registers a variable type for the whole object as well, so that instance variables can
+        /// share their types across the events of the same object.
+        /// </summary>
+        private void RegisterInstanceVariableTypeForObject(GlobalMacroTypeResolver globalResolver, string codeEntryName, string name, IMacroType type)
+        {
+            if (_instanceVariableNames.Contains(name) &&
+                GlobalMacroTypeResolver.GetObjectNameFromCodeEntryName(codeEntryName) is string objectName)
+            {
+                globalResolver.DefineVariableTypeForObject(objectName, name, type);
             }
         }
 
@@ -1233,6 +1286,7 @@ public static class FunctionArgTypeInference
             if (IsPropagatableVariable(destination))
             {
                 RecordVariableSources(destination.Variable.Name.Content, valueSources);
+                RecordInstanceVariableForSharing(destination);
             }
         }
 

@@ -884,6 +884,56 @@ public class FunctionArgTypeInferenceTests
     }
 
     [Fact]
+    public void TestInferInstanceVariableTypeFromOtherObjectEvent()
+    {
+        GameContextMock gameContext = CreateGameContext(out _);
+        gameContext.DefineMockAsset(AssetType.Sprite, 14, "spr_lilypad");
+        gameContext.GameSpecificRegistry.MacroResolver.GlobalNames.DefineFunctionArgumentsType("draw_sprite_ext",
+            new FunctionArgsMacroType(
+            [
+                gameContext.GameSpecificRegistry.FindType("Asset.Sprite"),
+                null, null, null, null, null, null, null, null
+            ]));
+
+        // The Draw event uses the instance variable "spr" at a sprite-typed argument position,
+        // inferring its type for the whole object
+        IGMCode drawCode = VMAssembly.ParseAssemblyFromLines(
+            """
+            pushi.e 0
+            conv.i.v
+            pushi.e 0
+            conv.i.v
+            pushi.e 0
+            conv.i.v
+            pushi.e 0
+            conv.i.v
+            pushi.e 0
+            conv.i.v
+            pushi.e 0
+            conv.i.v
+            pushi.e 0
+            conv.i.v
+            pushi.e 0
+            conv.i.v
+            push.v self.spr
+            call.i draw_sprite_ext 9
+            popz.v
+            """.Split('\n'), gameContext, "gml_Object_ClearItem_Draw_0");
+        string drawResult = new DecompileContext(gameContext, drawCode, new DecompileSettings()).DecompileToString().Trim();
+        Assert.Equal("draw_sprite_ext(spr, 0, 0, 0, 0, 0, 0, 0, 0);", drawResult);
+
+        // The Create event assigns the instance variable a literal, which is now expanded using the
+        // type inferred from the Draw event of the same object
+        IGMCode createCode = VMAssembly.ParseAssemblyFromLines(
+            """
+            pushi.e 14
+            pop.v.i self.spr
+            """.Split('\n'), gameContext, "gml_Object_ClearItem_Create_0");
+        string createResult = new DecompileContext(gameContext, createCode, new DecompileSettings()).DecompileToString().Trim();
+        Assert.Equal("spr = spr_lilypad;", createResult);
+    }
+
+    [Fact]
     public void TestReversePropagateVariableTypeFromRegisteredArgs()
     {
         GameContextMock gameContext = CreateGameContext(out _);
