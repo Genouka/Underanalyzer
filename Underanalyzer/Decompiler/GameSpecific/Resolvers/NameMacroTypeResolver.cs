@@ -82,6 +82,19 @@ public class NameMacroTypeResolver : IMacroTypeResolver
         return null;
     }
 
+    /// <summary>
+    /// Attempts to look up the registered argument types for the given function, without requiring a cleaner.
+    /// Returns <see langword="null"/> if no types are registered.
+    /// </summary>
+    public IMacroType? TryGetFunctionArgumentsType(string? functionName)
+    {
+        if (functionName is not null && FunctionArguments.TryGetValue(functionName, out IMacroType? macroType))
+        {
+            return macroType;
+        }
+        return null;
+    }
+
     public IMacroType? ResolveReturnValueType(ASTCleaner cleaner, string? functionName)
     {
         if (functionName is not null && FunctionReturn.TryGetValue(functionName, out IMacroType? macroType))

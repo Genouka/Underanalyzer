@@ -71,6 +71,17 @@ public static class FunctionArgTypeInference
     }
 
     /// <summary>
+    /// Extracts the per-argument-position macro types from a function argument macro type.
+    /// Handles unions (merging position types in order), intersections, and conditionals that
+    /// delegate to inner function argument types. Returns <see langword="null"/> if the types
+    /// cannot be decomposed into per-position types.
+    /// </summary>
+    public static IMacroType?[]? GetFunctionArgumentTypes(IMacroTypeFunctionArgs argsMacroType)
+    {
+        return Analyzer.GetFunctionArgumentTypes(argsMacroType);
+    }
+
+    /// <summary>
     /// Internal AST analyzer that performs the actual data-flow tracking.
     /// </summary>
     private sealed class Analyzer
@@ -506,7 +517,7 @@ public static class FunctionArgTypeInference
         /// delegate to inner function argument types. Returns <see langword="null"/> if the types
         /// cannot be decomposed into per-position types.
         /// </summary>
-        private static IMacroType?[]? GetFunctionArgumentTypes(IMacroTypeFunctionArgs argsMacroType)
+        internal static IMacroType?[]? GetFunctionArgumentTypes(IMacroTypeFunctionArgs argsMacroType)
         {
             switch (argsMacroType)
             {

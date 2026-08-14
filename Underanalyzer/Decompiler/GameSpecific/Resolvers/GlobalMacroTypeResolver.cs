@@ -106,6 +106,51 @@ public class GlobalMacroTypeResolver : IMacroTypeResolver
         return GlobalNames.ResolveReturnValueType(cleaner, functionName);
     }
 
+    /// <summary>
+    /// Returns the argument types registered or previously inferred for the given function, without
+    /// triggering any new inference. <see langword="null"/> is returned if no type information is available.
+    /// </summary>
+    /// <param name="codeEntryName">
+    /// Name of the code entry for which to first check per-entry type definitions, or <see langword="null"/>
+    /// to only check global definitions.
+    /// </param>
+    /// <param name="isInferred">
+    /// Set to <see langword="true"/> when the returned type was produced by automatic inference
+    /// (as opposed to a registered definition).
+    /// </param>
+    public IMacroType? GetResolvedFunctionArgumentTypes(string? codeEntryName, string? functionName, out bool isInferred)
+    {
+        isInferred = false;
+        if (functionName is null)
+        {
+            return null;
+        }
+
+        if (codeEntryName is not null && CodeEntryNames.TryGetValue(codeEntryName, out NameMacroTypeResolver? resolver))
+        {
+            if (resolver.TryGetFunctionArgumentsType(functionName) is IMacroType registered)
+            {
+                return registered;
+            }
+        }
+
+        if (GlobalNames.TryGetFunctionArgumentsType(functionName) is IMacroType globalRegistered)
+        {
+            return globalRegistered;
+        }
+
+        lock (_inferLock)
+        {
+            if (_inferredFunctionArguments.TryGetValue(functionName, out IMacroType? cached))
+            {
+                isInferred = true;
+                return cached;
+            }
+        }
+
+        return null;
+    }
+
     // Cache of inferred function argument types, keyed by function name (null values are cached "no result").
     private readonly object _inferLock = new();
     private readonly Dictionary<string, IMacroType?> _inferredFunctionArguments = [];
