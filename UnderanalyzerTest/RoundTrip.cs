@@ -662,7 +662,7 @@ public class RoundTrip
             UsingGMLv2 = true,
             UsingAssetReferences = false
         };
-        ((BuiltinsMock)gameContext.Builtins).BuiltinFunctions["show_debug_message"] = 
+        ((BuiltinsMock)gameContext.Builtins).BuiltinFunctions["show_debug_message"] =
             new("show_debug_message", 1, 1);
         gameContext.DefineMockAsset(AssetType.Object, 123, "obj_test");
         TestUtil.VerifyRoundTrip(
@@ -3830,6 +3830,978 @@ public class RoundTrip
             xor.l.l
             pop.v.l self.a
             """
+        );
+    }
+
+    [Fact]
+    public void TestNullishPrePostOld()
+    {
+        TestUtil.VerifyRoundTripAssembly(
+            """
+            a[b++] ??= 123;
+            a[++b] ??= 123;
+            a[b[c]++] ??= 123;
+            a[++b[c]] ??= 123;
+            a[b[c++]] ??= 123;
+            a[b[++c]] ??= 123;
+            a[b[c++]++] ??= 123;
+            a[b[++c]++] ??= 123;
+            a[++b[c++]] ??= 123;
+            a[++b[++c]] ??= 123;
+            a[b(c++, d++)] ??= 123;
+            """,
+            """
+            pushi.e -6
+            push.v builtin.b
+            dup.v 0
+            push.e 1
+            add.i.v
+            pop.v.v builtin.b
+            conv.v.i
+            push.v [array]self.a
+            isnullish.e
+            bf [2]
+
+            :[1]
+            popz.v
+            pushi.e 123
+            conv.i.v
+            pushi.e -6
+            push.v builtin.b
+            dup.v 0
+            push.e 1
+            add.i.v
+            pop.v.v builtin.b
+            conv.v.i
+            pop.v.v [array]self.a
+            b [3]
+
+            :[2]
+            popz.v
+
+            :[3]
+            pushi.e -6
+            push.v builtin.b
+            push.e 1
+            add.i.v
+            dup.v 0
+            pop.v.v builtin.b
+            conv.v.i
+            push.v [array]self.a
+            isnullish.e
+            bf [5]
+
+            :[4]
+            popz.v
+            pushi.e 123
+            conv.i.v
+            pushi.e -6
+            push.v builtin.b
+            push.e 1
+            add.i.v
+            dup.v 0
+            pop.v.v builtin.b
+            conv.v.i
+            pop.v.v [array]self.a
+            b [6]
+
+            :[5]
+            popz.v
+
+            :[6]
+            pushi.e -6
+            pushi.e -6
+            push.v builtin.c
+            conv.v.i
+            dup.i 1
+            push.v [array]self.b
+            dup.v 0
+            dup.i 4 6
+            push.e 1
+            add.i.v
+            pop.i.v [array]self.b
+            conv.v.i
+            push.v [array]self.a
+            isnullish.e
+            bf [8]
+
+            :[7]
+            popz.v
+            pushi.e 123
+            conv.i.v
+            pushi.e -6
+            pushi.e -6
+            push.v builtin.c
+            conv.v.i
+            dup.i 1
+            push.v [array]self.b
+            dup.v 0
+            dup.i 4 6
+            push.e 1
+            add.i.v
+            pop.i.v [array]self.b
+            conv.v.i
+            pop.v.v [array]self.a
+            b [9]
+
+            :[8]
+            popz.v
+
+            :[9]
+            pushi.e -6
+            pushi.e -6
+            push.v builtin.c
+            conv.v.i
+            dup.i 1
+            push.v [array]self.b
+            push.e 1
+            add.i.v
+            dup.v 0
+            dup.i 4 6
+            pop.i.v [array]self.b
+            conv.v.i
+            push.v [array]self.a
+            isnullish.e
+            bf [11]
+
+            :[10]
+            popz.v
+            pushi.e 123
+            conv.i.v
+            pushi.e -6
+            pushi.e -6
+            push.v builtin.c
+            conv.v.i
+            dup.i 1
+            push.v [array]self.b
+            push.e 1
+            add.i.v
+            dup.v 0
+            dup.i 4 6
+            pop.i.v [array]self.b
+            conv.v.i
+            pop.v.v [array]self.a
+            b [12]
+
+            :[11]
+            popz.v
+
+            :[12]
+            pushi.e -6
+            pushi.e -6
+            push.v builtin.c
+            dup.v 0
+            push.e 1
+            add.i.v
+            pop.v.v builtin.c
+            conv.v.i
+            push.v [array]self.b
+            conv.v.i
+            push.v [array]self.a
+            isnullish.e
+            bf [14]
+
+            :[13]
+            popz.v
+            pushi.e 123
+            conv.i.v
+            pushi.e -6
+            pushi.e -6
+            push.v builtin.c
+            dup.v 0
+            push.e 1
+            add.i.v
+            pop.v.v builtin.c
+            conv.v.i
+            push.v [array]self.b
+            conv.v.i
+            pop.v.v [array]self.a
+            b [15]
+
+            :[14]
+            popz.v
+
+            :[15]
+            pushi.e -6
+            pushi.e -6
+            push.v builtin.c
+            push.e 1
+            add.i.v
+            dup.v 0
+            pop.v.v builtin.c
+            conv.v.i
+            push.v [array]self.b
+            conv.v.i
+            push.v [array]self.a
+            isnullish.e
+            bf [17]
+
+            :[16]
+            popz.v
+            pushi.e 123
+            conv.i.v
+            pushi.e -6
+            pushi.e -6
+            push.v builtin.c
+            push.e 1
+            add.i.v
+            dup.v 0
+            pop.v.v builtin.c
+            conv.v.i
+            push.v [array]self.b
+            conv.v.i
+            pop.v.v [array]self.a
+            b [18]
+
+            :[17]
+            popz.v
+
+            :[18]
+            pushi.e -6
+            pushi.e -6
+            push.v builtin.c
+            dup.v 0
+            push.e 1
+            add.i.v
+            pop.v.v builtin.c
+            conv.v.i
+            dup.i 1
+            push.v [array]self.b
+            dup.v 0
+            dup.i 4 6
+            push.e 1
+            add.i.v
+            pop.i.v [array]self.b
+            conv.v.i
+            push.v [array]self.a
+            isnullish.e
+            bf [20]
+
+            :[19]
+            popz.v
+            pushi.e 123
+            conv.i.v
+            pushi.e -6
+            pushi.e -6
+            push.v builtin.c
+            dup.v 0
+            push.e 1
+            add.i.v
+            pop.v.v builtin.c
+            conv.v.i
+            dup.i 1
+            push.v [array]self.b
+            dup.v 0
+            dup.i 4 6
+            push.e 1
+            add.i.v
+            pop.i.v [array]self.b
+            conv.v.i
+            pop.v.v [array]self.a
+            b [21]
+
+            :[20]
+            popz.v
+
+            :[21]
+            pushi.e -6
+            pushi.e -6
+            push.v builtin.c
+            push.e 1
+            add.i.v
+            dup.v 0
+            pop.v.v builtin.c
+            conv.v.i
+            dup.i 1
+            push.v [array]self.b
+            dup.v 0
+            dup.i 4 6
+            push.e 1
+            add.i.v
+            pop.i.v [array]self.b
+            conv.v.i
+            push.v [array]self.a
+            isnullish.e
+            bf [23]
+
+            :[22]
+            popz.v
+            pushi.e 123
+            conv.i.v
+            pushi.e -6
+            pushi.e -6
+            push.v builtin.c
+            push.e 1
+            add.i.v
+            dup.v 0
+            pop.v.v builtin.c
+            conv.v.i
+            dup.i 1
+            push.v [array]self.b
+            dup.v 0
+            dup.i 4 6
+            push.e 1
+            add.i.v
+            pop.i.v [array]self.b
+            conv.v.i
+            pop.v.v [array]self.a
+            b [24]
+
+            :[23]
+            popz.v
+
+            :[24]
+            pushi.e -6
+            pushi.e -6
+            push.v builtin.c
+            dup.v 0
+            push.e 1
+            add.i.v
+            pop.v.v builtin.c
+            conv.v.i
+            dup.i 1
+            push.v [array]self.b
+            push.e 1
+            add.i.v
+            dup.v 0
+            dup.i 4 6
+            pop.i.v [array]self.b
+            conv.v.i
+            push.v [array]self.a
+            isnullish.e
+            bf [26]
+
+            :[25]
+            popz.v
+            pushi.e 123
+            conv.i.v
+            pushi.e -6
+            pushi.e -6
+            push.v builtin.c
+            dup.v 0
+            push.e 1
+            add.i.v
+            pop.v.v builtin.c
+            conv.v.i
+            dup.i 1
+            push.v [array]self.b
+            push.e 1
+            add.i.v
+            dup.v 0
+            dup.i 4 6
+            pop.i.v [array]self.b
+            conv.v.i
+            pop.v.v [array]self.a
+            b [27]
+
+            :[26]
+            popz.v
+
+            :[27]
+            pushi.e -6
+            pushi.e -6
+            push.v builtin.c
+            push.e 1
+            add.i.v
+            dup.v 0
+            pop.v.v builtin.c
+            conv.v.i
+            dup.i 1
+            push.v [array]self.b
+            push.e 1
+            add.i.v
+            dup.v 0
+            dup.i 4 6
+            pop.i.v [array]self.b
+            conv.v.i
+            push.v [array]self.a
+            isnullish.e
+            bf [29]
+
+            :[28]
+            popz.v
+            pushi.e 123
+            conv.i.v
+            pushi.e -6
+            pushi.e -6
+            push.v builtin.c
+            push.e 1
+            add.i.v
+            dup.v 0
+            pop.v.v builtin.c
+            conv.v.i
+            dup.i 1
+            push.v [array]self.b
+            push.e 1
+            add.i.v
+            dup.v 0
+            dup.i 4 6
+            pop.i.v [array]self.b
+            conv.v.i
+            pop.v.v [array]self.a
+            b [30]
+
+            :[29]
+            popz.v
+
+            :[30]
+            pushi.e -6
+            push.v builtin.d
+            dup.v 0
+            push.e 1
+            add.i.v
+            pop.v.v builtin.d
+            push.v builtin.c
+            dup.v 0
+            push.e 1
+            add.i.v
+            pop.v.v builtin.c
+            call.i @@This@@ 0
+            push.v builtin.b
+            callv.v 2
+            conv.v.i
+            push.v [array]self.a
+            isnullish.e
+            bf [32]
+
+            :[31]
+            popz.v
+            pushi.e 123
+            conv.i.v
+            pushi.e -6
+            push.v builtin.d
+            dup.v 0
+            push.e 1
+            add.i.v
+            pop.v.v builtin.d
+            push.v builtin.c
+            dup.v 0
+            push.e 1
+            add.i.v
+            pop.v.v builtin.c
+            call.i @@This@@ 0
+            push.v builtin.b
+            callv.v 2
+            conv.v.i
+            pop.v.v [array]self.a
+            b [33]
+
+            :[32]
+            popz.v
+
+            :[33]
+            """,
+            false,
+            new GameContextMock()
+            {
+                UsingSelfToBuiltin = true
+            }
+        );
+    }
+
+    [Fact]
+    public void TestNullishPrePostNew()
+    {
+        TestUtil.VerifyRoundTripAssembly(
+            """
+            a[b++] ??= 123;
+            a[++b] ??= 123;
+            a[b[c]++] ??= 123;
+            a[++b[c]] ??= 123;
+            a[b[c++]] ??= 123;
+            a[b[++c]] ??= 123;
+            a[b[c++]++] ??= 123;
+            a[b[++c]++] ??= 123;
+            a[++b[c++]] ??= 123;
+            a[++b[++c]] ??= 123;
+            a[b(c++, d++)] ??= 123;
+            """,
+            """
+            :[0]
+            pushi.e -6
+            push.v builtin.b
+            conv.v.i
+            push.v [array]self.a
+            isnullish.e
+            bf [2]
+
+            :[1]
+            popz.v
+            pushi.e 123
+            conv.i.v
+            pushi.e -6
+            push.v builtin.b
+            dup.v 0
+            push.e 1
+            add.i.v
+            pop.v.v builtin.b
+            conv.v.i
+            pop.v.v [array]self.a
+            b [3]
+
+            :[2]
+            popz.v
+            push.v builtin.b
+            push.e 1
+            add.i.v
+            pop.v.v builtin.b
+
+            :[3]
+            pushi.e -6
+            push.v builtin.b
+            pushi.e 1
+            add.i.v
+            conv.v.i
+            push.v [array]self.a
+            isnullish.e
+            bf [5]
+
+            :[4]
+            popz.v
+            pushi.e 123
+            conv.i.v
+            pushi.e -6
+            push.v builtin.b
+            push.e 1
+            add.i.v
+            dup.v 0
+            pop.v.v builtin.b
+            conv.v.i
+            pop.v.v [array]self.a
+            b [6]
+
+            :[5]
+            popz.v
+            push.v builtin.b
+            push.e 1
+            add.i.v
+            pop.v.v builtin.b
+
+            :[6]
+            pushi.e -6
+            pushi.e -6
+            push.v builtin.c
+            conv.v.i
+            push.v [array]self.b
+            conv.v.i
+            push.v [array]self.a
+            isnullish.e
+            bf [8]
+
+            :[7]
+            popz.v
+            pushi.e 123
+            conv.i.v
+            pushi.e -6
+            pushi.e -6
+            push.v builtin.c
+            conv.v.i
+            dup.i 1
+            push.v [array]self.b
+            dup.v 0
+            dup.i 4 6
+            push.e 1
+            add.i.v
+            pop.i.v [array]self.b
+            conv.v.i
+            pop.v.v [array]self.a
+            b [9]
+
+            :[8]
+            popz.v
+            pushi.e -6
+            push.v builtin.c
+            conv.v.i
+            dup.i 1
+            push.v [array]self.b
+            push.e 1
+            add.i.v
+            pop.i.v [array]self.b
+
+            :[9]
+            pushi.e -6
+            pushi.e -6
+            push.v builtin.c
+            conv.v.i
+            push.v [array]self.b
+            pushi.e 1
+            add.i.v
+            conv.v.i
+            push.v [array]self.a
+            isnullish.e
+            bf [11]
+
+            :[10]
+            popz.v
+            pushi.e 123
+            conv.i.v
+            pushi.e -6
+            pushi.e -6
+            push.v builtin.c
+            conv.v.i
+            dup.i 1
+            push.v [array]self.b
+            push.e 1
+            add.i.v
+            dup.v 0
+            dup.i 4 6
+            pop.i.v [array]self.b
+            conv.v.i
+            pop.v.v [array]self.a
+            b [12]
+
+            :[11]
+            popz.v
+            pushi.e -6
+            push.v builtin.c
+            conv.v.i
+            dup.i 1
+            push.v [array]self.b
+            push.e 1
+            add.i.v
+            pop.i.v [array]self.b
+
+            :[12]
+            pushi.e -6
+            pushi.e -6
+            push.v builtin.c
+            conv.v.i
+            push.v [array]self.b
+            conv.v.i
+            push.v [array]self.a
+            isnullish.e
+            bf [14]
+
+            :[13]
+            popz.v
+            pushi.e 123
+            conv.i.v
+            pushi.e -6
+            pushi.e -6
+            push.v builtin.c
+            dup.v 0
+            push.e 1
+            add.i.v
+            pop.v.v builtin.c
+            conv.v.i
+            push.v [array]self.b
+            conv.v.i
+            pop.v.v [array]self.a
+            b [15]
+
+            :[14]
+            popz.v
+            push.v builtin.c
+            push.e 1
+            add.i.v
+            pop.v.v builtin.c
+
+            :[15]
+            pushi.e -6
+            pushi.e -6
+            push.v builtin.c
+            pushi.e 1
+            add.i.v
+            conv.v.i
+            push.v [array]self.b
+            conv.v.i
+            push.v [array]self.a
+            isnullish.e
+            bf [17]
+
+            :[16]
+            popz.v
+            pushi.e 123
+            conv.i.v
+            pushi.e -6
+            pushi.e -6
+            push.v builtin.c
+            push.e 1
+            add.i.v
+            dup.v 0
+            pop.v.v builtin.c
+            conv.v.i
+            push.v [array]self.b
+            conv.v.i
+            pop.v.v [array]self.a
+            b [18]
+
+            :[17]
+            popz.v
+            push.v builtin.c
+            push.e 1
+            add.i.v
+            pop.v.v builtin.c
+
+            :[18]
+            pushi.e -6
+            pushi.e -6
+            push.v builtin.c
+            dup.v 0
+            push.e 1
+            add.i.v
+            pop.v.v builtin.c
+            conv.v.i
+            push.v [array]self.b
+            conv.v.i
+            push.v [array]self.a
+            isnullish.e
+            bf [20]
+
+            :[19]
+            popz.v
+            pushi.e 123
+            conv.i.v
+            pushi.e -6
+            pushi.e -6
+            push.v builtin.c
+            dup.v 0
+            push.e 1
+            add.i.v
+            pop.v.v builtin.c
+            conv.v.i
+            dup.i 1
+            push.v [array]self.b
+            dup.v 0
+            dup.i 4 6
+            push.e 1
+            add.i.v
+            pop.i.v [array]self.b
+            conv.v.i
+            pop.v.v [array]self.a
+            b [21]
+
+            :[20]
+            popz.v
+            pushi.e -6
+            push.v builtin.c
+            dup.v 0
+            push.e 1
+            add.i.v
+            pop.v.v builtin.c
+            conv.v.i
+            dup.i 1
+            push.v [array]self.b
+            push.e 1
+            add.i.v
+            pop.i.v [array]self.b
+
+            :[21]
+            pushi.e -6
+            pushi.e -6
+            push.v builtin.c
+            push.e 1
+            add.i.v
+            dup.v 0
+            pop.v.v builtin.c
+            conv.v.i
+            push.v [array]self.b
+            conv.v.i
+            push.v [array]self.a
+            isnullish.e
+            bf [23]
+
+            :[22]
+            popz.v
+            pushi.e 123
+            conv.i.v
+            pushi.e -6
+            pushi.e -6
+            push.v builtin.c
+            push.e 1
+            add.i.v
+            dup.v 0
+            pop.v.v builtin.c
+            conv.v.i
+            dup.i 1
+            push.v [array]self.b
+            dup.v 0
+            dup.i 4 6
+            push.e 1
+            add.i.v
+            pop.i.v [array]self.b
+            conv.v.i
+            pop.v.v [array]self.a
+            b [24]
+
+            :[23]
+            popz.v
+            pushi.e -6
+            push.v builtin.c
+            push.e 1
+            add.i.v
+            dup.v 0
+            pop.v.v builtin.c
+            conv.v.i
+            dup.i 1
+            push.v [array]self.b
+            push.e 1
+            add.i.v
+            pop.i.v [array]self.b
+
+            :[24]
+            pushi.e -6
+            pushi.e -6
+            push.v builtin.c
+            dup.v 0
+            push.e 1
+            add.i.v
+            pop.v.v builtin.c
+            conv.v.i
+            push.v [array]self.b
+            pushi.e 1
+            add.i.v
+            conv.v.i
+            push.v [array]self.a
+            isnullish.e
+            bf [26]
+
+            :[25]
+            popz.v
+            pushi.e 123
+            conv.i.v
+            pushi.e -6
+            pushi.e -6
+            push.v builtin.c
+            dup.v 0
+            push.e 1
+            add.i.v
+            pop.v.v builtin.c
+            conv.v.i
+            dup.i 1
+            push.v [array]self.b
+            push.e 1
+            add.i.v
+            dup.v 0
+            dup.i 4 6
+            pop.i.v [array]self.b
+            conv.v.i
+            pop.v.v [array]self.a
+            b [27]
+
+            :[26]
+            popz.v
+            pushi.e -6
+            push.v builtin.c
+            dup.v 0
+            push.e 1
+            add.i.v
+            pop.v.v builtin.c
+            conv.v.i
+            dup.i 1
+            push.v [array]self.b
+            push.e 1
+            add.i.v
+            pop.i.v [array]self.b
+
+            :[27]
+            pushi.e -6
+            pushi.e -6
+            push.v builtin.c
+            push.e 1
+            add.i.v
+            dup.v 0
+            pop.v.v builtin.c
+            conv.v.i
+            push.v [array]self.b
+            pushi.e 1
+            add.i.v
+            conv.v.i
+            push.v [array]self.a
+            isnullish.e
+            bf [29]
+
+            :[28]
+            popz.v
+            pushi.e 123
+            conv.i.v
+            pushi.e -6
+            pushi.e -6
+            push.v builtin.c
+            push.e 1
+            add.i.v
+            dup.v 0
+            pop.v.v builtin.c
+            conv.v.i
+            dup.i 1
+            push.v [array]self.b
+            push.e 1
+            add.i.v
+            dup.v 0
+            dup.i 4 6
+            pop.i.v [array]self.b
+            conv.v.i
+            pop.v.v [array]self.a
+            b [30]
+
+            :[29]
+            popz.v
+            pushi.e -6
+            push.v builtin.c
+            push.e 1
+            add.i.v
+            dup.v 0
+            pop.v.v builtin.c
+            conv.v.i
+            dup.i 1
+            push.v [array]self.b
+            push.e 1
+            add.i.v
+            pop.i.v [array]self.b
+
+            :[30]
+            pushi.e -6
+            push.v builtin.d
+            push.v builtin.c
+            call.i @@This@@ 0
+            push.v builtin.b
+            callv.v 2
+            conv.v.i
+            push.v [array]self.a
+            isnullish.e
+            bf [32]
+
+            :[31]
+            popz.v
+            pushi.e 123
+            conv.i.v
+            pushi.e -6
+            push.v builtin.d
+            dup.v 0
+            push.e 1
+            add.i.v
+            pop.v.v builtin.d
+            push.v builtin.c
+            dup.v 0
+            push.e 1
+            add.i.v
+            pop.v.v builtin.c
+            call.i @@This@@ 0
+            push.v builtin.b
+            callv.v 2
+            conv.v.i
+            pop.v.v [array]self.a
+            b [33]
+
+            :[32]
+            popz.v
+            push.v builtin.c
+            push.e 1
+            add.i.v
+            pop.v.v builtin.c
+            push.v builtin.d
+            push.e 1
+            add.i.v
+            pop.v.v builtin.d
+
+            :[33]
+            """,
+            false,
+            new GameContextMock()
+            {
+                UsingSelfToBuiltin = true,
+                UsingNewNullishAssignSideEffects = true
+            }
         );
     }
 }

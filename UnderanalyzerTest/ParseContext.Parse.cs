@@ -220,7 +220,7 @@ public class ParseContext_Parse
             (node) => Assert.Equal(AssignNode.AssignKind.CompoundBitwiseAnd, ((AssignNode)node).Kind),
             (node) => Assert.Equal(AssignNode.AssignKind.CompoundBitwiseOr, ((AssignNode)node).Kind),
             (node) => Assert.Equal(AssignNode.AssignKind.CompoundBitwiseXor, ((AssignNode)node).Kind),
-            (node) => Assert.Equal(AssignNode.AssignKind.CompoundNullishCoalesce, ((AssignNode)node).Kind),
+            (node) => Assert.Equal("a", ((SimpleVariableNode)((NullishCoalesceAssignNode)node).Destination).VariableName),
             (node) => Assert.True(((PrefixNode)node).IsIncrement),
             (node) => Assert.False(((PrefixNode)node).IsIncrement),
             (node) => Assert.True(((PostfixNode)node).IsIncrement),
