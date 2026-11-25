@@ -534,7 +534,8 @@ public class VariableNode(IGMVariable variable, VariableType referenceType, IExp
     /// <inheritdoc/>
     public IMacroType? GetExpressionMacroType(ASTCleaner cleaner)
     {
-        return cleaner.GlobalMacroResolver.ResolveVariableType(cleaner, Variable.Name.Content);
+        string lookupName = GlobalMacroTypeResolver.GetVariableLookupName(Variable.Name.Content, Left);
+        return cleaner.GlobalMacroResolver.ResolveVariableType(cleaner, lookupName);
     }
 
     /// <inheritdoc/>

@@ -1090,8 +1090,194 @@ public class FunctionArgTypeInferenceTests
         );
 
         // (b) The script body now expands the literal assigned to the variable
-        IGMCode bodyCode = provider.GetFunctionCode("scr_set_color");
+        IGMCode bodyCode = provider.GetFunctionCode("scr_set_color")!;
         string bodyResult = new DecompileContext(gameContext, bodyCode, new DecompileSettings()).DecompileToString().Trim();
         Assert.Equal("var c = argument0;\nc = c_red;\ndraw_set_color(c);", bodyResult);
+    }
+
+    private const string SpriteDrawTail = """
+        pushi.e 0
+        conv.i.v
+        pushi.e 0
+        conv.i.v
+        pushi.e 0
+        conv.i.v
+        pushi.e 0
+        conv.i.v
+        pushi.e 0
+        conv.i.v
+        pushi.e 0
+        conv.i.v
+        pushi.e 0
+        conv.i.v
+        pushi.e 0
+        conv.i.v
+        """;
+
+    private static GameContextMock CreateSpriteContext()
+    {
+        GameContextMock gameContext = CreateGameContext(out _);
+        gameContext.DefineMockAsset(AssetType.Sprite, 496, "spr_fire_small");
+        gameContext.GameSpecificRegistry.MacroResolver.GlobalNames.DefineFunctionArgumentsType("draw_sprite_ext",
+            new FunctionArgsMacroType(
+            [
+                gameContext.GameSpecificRegistry.FindType("Asset.Sprite"),
+                null, null, null, null, null, null, null, null
+            ]));
+        return gameContext;
+    }
+
+    [Fact]
+    public void TestInferVariableTypeThroughAssignmentChain()
+    {
+        GameContextMock gameContext = CreateSpriteContext();
+
+        // The sprite type is known from where the last variable is used; both upstream copies
+        // of the value (and their literals) are expanded through the assignment chain
+        TestUtil.VerifyDecompileResult(
+            """
+            pushi.e 496
+            pop.v.i local.a
+            push.v local.a
+            pop.v.i local.b
+            """ + "\n" + SpriteDrawTail + "\n" + """
+            push.v local.b
+            call.i draw_sprite_ext 9
+            popz.v
+            """,
+            """
+            var a = spr_fire_small;
+            var b = a;
+            draw_sprite_ext(b, 0, 0, 0, 0, 0, 0, 0, 0);
+            """,
+            gameContext
+        );
+    }
+
+    [Fact]
+    public void TestAssignmentChainStopsAtImpureVariables()
+    {
+        GameContextMock gameContext = CreateSpriteContext();
+
+        // The middle variable takes part in an arithmetic expression, so its own literals must
+        // not be expanded from the typed usage downstream
+        TestUtil.VerifyDecompileResult(
+            """
+            pushi.e 496
+            pop.v.i local.a
+            pushi.e 1
+            push.v local.a
+            add.v.v
+            pop.v.i local.b
+            """ + "\n" + SpriteDrawTail + "\n" + """
+            push.v local.b
+            call.i draw_sprite_ext 9
+            popz.v
+            """,
+            """
+            var a = 496;
+            var b = 1 + a;
+            draw_sprite_ext(b, 0, 0, 0, 0, 0, 0, 0, 0);
+            """,
+            gameContext
+        );
+    }
+
+    [Fact]
+    public void TestInferGlobalVariableTypeThroughAssignmentChain()
+    {
+        GameContextMock gameContext = CreateSpriteContext();
+
+        // Global variables chain their types as well, using the explicit global scope so that
+        // same-named locals/instance variables are unaffected
+        TestUtil.VerifyDecompileResult(
+            """
+            pushi.e 496
+            pop.v.i global.spr
+            push.v global.spr
+            pop.v.i global.spr2
+            """ + "\n" + SpriteDrawTail + "\n" + """
+            push.v global.spr2
+            call.i draw_sprite_ext 9
+            popz.v
+            """,
+            """
+            global.spr = spr_fire_small;
+            global.spr2 = global.spr;
+            draw_sprite_ext(global.spr2, 0, 0, 0, 0, 0, 0, 0, 0);
+            """,
+            gameContext
+        );
+    }
+
+    [Fact]
+    public void TestInferGlobalVariableTypeAcrossCodeEntries()
+    {
+        GameContextMock gameContext = CreateSpriteContext();
+
+        // Decompiling the entry that uses the global variable at a typed position registers the
+        // global type; a later decompile of the entry assigning the literal expands it
+        IGMCode drawCode = VMAssembly.ParseAssemblyFromLines((SpriteDrawTail + "\n" + """
+            push.v global.spr
+            call.i draw_sprite_ext 9
+            popz.v
+            """).Split('\n'), gameContext, "gml_Object_obj_Draw_0")!;
+        string drawResult = new DecompileContext(gameContext, drawCode, new DecompileSettings()).DecompileToString().Trim();
+        Assert.Equal("draw_sprite_ext(global.spr, 0, 0, 0, 0, 0, 0, 0, 0);", drawResult);
+
+        IGMCode createCode = VMAssembly.ParseAssemblyFromLines("""
+            pushi.e 496
+            pop.v.i global.spr
+            """.Split('\n'), gameContext, "gml_Object_obj_Create_0")!;
+        string createResult = new DecompileContext(gameContext, createCode, new DecompileSettings()).DecompileToString().Trim();
+        Assert.Equal("global.spr = spr_fire_small;", createResult);
+    }
+
+    [Fact]
+    public void TestInferObjectIdFromMemberAccess()
+    {
+        GameContextMock gameContext = CreateSpriteContext();
+        gameContext.DefineMockAsset(AssetType.Object, 273, "obj_sun_shroom_battle");
+
+        GMCode code = VMAssembly.ParseAssemblyFromLines("""
+            pushi.e 273
+            pop.v.i self.enemy
+            push.v self.enemy
+            push.v [stacktop]stacktop.hp
+            pop.v.v local.hp
+            """.Split('\n'), gameContext)!;
+
+        // Disabled by default: the literal stays numeric
+        string disabled = new DecompileContext(gameContext, code, new DecompileSettings()).DecompileToString().Trim();
+        Assert.Equal("enemy = 273;\nvar hp = enemy.hp;", disabled);
+
+        // Enabled: the variable is treated as an object reference and the literal expands
+        string enabled = new DecompileContext(gameContext, code,
+            new DecompileSettings { InferObjectIdFromMemberAccess = true }).DecompileToString().Trim();
+        Assert.Equal("enemy = obj_sun_shroom_battle;\nvar hp = enemy.hp;", enabled);
+    }
+
+    [Fact]
+    public void TestPreScanMakesGlobalTypeOrderIndependent()
+    {
+        GameContextMock gameContext = CreateSpriteContext();
+        DecompileSettings settings = new();
+
+        IGMCode drawCode = VMAssembly.ParseAssemblyFromLines((SpriteDrawTail + "\n" + """
+            push.v global.spr
+            call.i draw_sprite_ext 9
+            popz.v
+            """).Split('\n'), gameContext, "gml_Object_obj_Draw_0")!;
+        IGMCode createCode = VMAssembly.ParseAssemblyFromLines("""
+            pushi.e 496
+            pop.v.i global.spr
+            """.Split('\n'), gameContext, "gml_Object_obj_Create_0")!;
+
+        // Pre-scan registers the type from the Draw entry before any entry is decompiled for output.
+        // Decompiling the Create entry first must still expand its literal.
+        GlobalTypePreScanner.Scan(gameContext, [drawCode, createCode], settings);
+
+        string result = new DecompileContext(gameContext, createCode, settings).DecompileToString().Trim();
+        Assert.Equal("global.spr = spr_fire_small;", result);
     }
 }

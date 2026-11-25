@@ -122,38 +122,59 @@ public sealed class DecompileContext
         }
     }
 
+    /// <summary>
+    /// Decompiles the code entry's AST and performs type inference only, without cleaning or
+    /// printing it. Used by the global type pre-scan so that inferred types are available before
+    /// any code entry is decompiled for display.
+    /// </summary>
+    public void DecompileForTypeInference()
+    {
+        DecompileControlFlow();
+        AST.IStatementNode ast = DecompileAST();
+        InferTypesBeforeCleaning(ast, new AST.ASTCleaner(this));
+    }
+
+    /// <summary>
+    /// Performs return-value and variable type inference on an uncleaned AST.
+    /// </summary>
+    private void InferTypesBeforeCleaning(AST.IStatementNode ast, AST.ASTCleaner cleaner)
+    {
+        // Before cleaning, attempt to infer this code entry's return type from the values it
+        // returns, so that literals flowing into the return value (e.g. "spr = 441; return spr;")
+        // can be expanded as named constants. This also runs for the internal decompiles used by
+        // argument type inference, keeping the recursive inference self-contained.
+        if (!Settings.InferFunctionArgumentTypes || FragmentNodes is not { Count: > 0 })
+        {
+            return;
+        }
+
+        cleaner.PushFragmentContext(new AST.ASTFragmentContext(null, FragmentNodes[0]));
+        try
+        {
+            GameSpecific.FunctionArgTypeInference.MaybeInferReturnValueTypes(cleaner, ast);
+            if (Settings.ReverseInferVariableTypes)
+            {
+                // Infer this code entry's variable types from their own usage (e.g. a local
+                // passed to a sprite-typed argument, like "fire_spr = 496; draw_sprite_ext(fire_spr, ...)").
+                // Running this on the entry itself (rather than only when a caller triggers
+                // argument inference) keeps it self-contained, so literals assigned to such
+                // variables are expanded even on a direct decompile.
+                GameSpecific.FunctionArgTypeInference.Infer(cleaner, ast, Code);
+            }
+        }
+        finally
+        {
+            cleaner.PopFragmentContext();
+        }
+    }
+
     // Decompiles the AST from the code entry
     private AST.IStatementNode CleanupAST(AST.IStatementNode ast)
     {
         try
         {
             AST.ASTCleaner cleaner = new(this);
-
-            // Before cleaning, attempt to infer this code entry's return type from the values it
-            // returns, so that literals flowing into the return value (e.g. "spr = 441; return spr;")
-            // can be expanded as named constants. This also runs for the internal decompiles used by
-            // argument type inference, keeping the recursive inference self-contained.
-            if (Settings.InferFunctionArgumentTypes && FragmentNodes is { Count: > 0 })
-            {
-                cleaner.PushFragmentContext(new AST.ASTFragmentContext(null, FragmentNodes[0]));
-                try
-                {
-                    GameSpecific.FunctionArgTypeInference.MaybeInferReturnValueTypes(cleaner, ast);
-                    if (Settings.ReverseInferVariableTypes)
-                    {
-                        // Infer this code entry's variable types from their own usage (e.g. a local
-                        // passed to a sprite-typed argument, like "fire_spr = 496; draw_sprite_ext(fire_spr, ...)").
-                        // Running this on the entry itself (rather than only when a caller triggers
-                        // argument inference) keeps it self-contained, so literals assigned to such
-                        // variables are expanded even on a direct decompile.
-                        GameSpecific.FunctionArgTypeInference.Infer(cleaner, ast, Code);
-                    }
-                }
-                finally
-                {
-                    cleaner.PopFragmentContext();
-                }
-            }
+            InferTypesBeforeCleaning(ast, cleaner);
 
             AST.IStatementNode cleaned = ast.Clean(cleaner);
             if (Settings.CreateEnumDeclarations)
