@@ -7,6 +7,7 @@
 using System;
 using System.Collections.Generic;
 using Underanalyzer.Decompiler.AST;
+using static Underanalyzer.IGMInstruction;
 
 namespace Underanalyzer.Decompiler.GameSpecific;
 
@@ -18,7 +19,17 @@ namespace Underanalyzer.Decompiler.GameSpecific;
 /// </summary>
 public class GlobalMacroTypeResolver : IMacroTypeResolver
 {
+    /// <summary>
+    /// Prefix used for global variable names in macro type lookup tables.
+    /// </summary>
+    public const string GlobalVariablePrefix = "global.";
+
     public NameMacroTypeResolver GlobalNames { get; set; }
+
+    /// <summary>
+    /// Whether the global type pre-scan has already been performed for this resolver.
+    /// </summary>
+    public bool TypesPreScanned { get; set; }
     private Dictionary<string, NameMacroTypeResolver> CodeEntryNames { get; }
 
     /// <summary>
@@ -58,6 +69,34 @@ public class GlobalMacroTypeResolver : IMacroTypeResolver
             CodeEntryNames[codeEntry] = resolver;
         }
         resolver.DefineVariableType(variableName, type);
+    }
+
+    /// <summary>
+    /// Defines a variable's macro type for global scope. Global variables are stored separately
+    /// from per-code-entry and per-object variables, so they are shared across all code entries
+    /// without polluting same-named instance or local variables.
+    /// </summary>
+    public void DefineGlobalVariableType(string name, IMacroType? type)
+    {
+        GlobalNames.DefineVariableType(GlobalVariablePrefix + name, type);
+    }
+
+    /// <summary>
+    /// Returns the key to use when looking up or defining a variable's macro type, taking its scope
+    /// into account. Only explicitly global variables are scoped; everything else uses the bare name.
+    /// </summary>
+    public static string GetVariableLookupName(string name, IExpressionNode? left)
+    {
+        return IsGlobalReference(left) ? GlobalVariablePrefix + name : name;
+    }
+
+    /// <summary>
+    /// Returns whether the given variable's left-hand expression explicitly references global scope.
+    /// </summary>
+    public static bool IsGlobalReference(IExpressionNode? left)
+    {
+        return left is InstanceTypeNode { InstanceType: InstanceType.Global } or
+            Int16Node { Value: (short)InstanceType.Global };
     }
 
     /// <summary>
@@ -111,7 +150,14 @@ public class GlobalMacroTypeResolver : IMacroTypeResolver
             }
         }
 
-        return GlobalNames.ResolveVariableType(cleaner, variableName);
+        IMacroType? resolvedGlobal = GlobalNames.ResolveVariableType(cleaner, variableName);
+        if (resolvedGlobal is null && variableName.StartsWith(GlobalVariablePrefix, StringComparison.Ordinal))
+        {
+            // Explicit global variables can also use built-in variable types registered under their
+            // bare name (e.g. "global.sprite_index"), but instance/local types must not leak here.
+            resolvedGlobal = GlobalNames.ResolveVariableType(cleaner, variableName[GlobalVariablePrefix.Length..]);
+        }
+        return resolvedGlobal;
     }
 
     public IMacroType? ResolveFunctionArgumentTypes(ASTCleaner cleaner, string? functionName)

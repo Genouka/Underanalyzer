@@ -155,6 +155,23 @@ public interface IDecompileSettings
     public bool InlinePropagateVariableTypes { get; }
 
     /// <summary>
+    /// If true, variables that are used as the target of a member access (e.g. <c>enemy</c> in
+    /// <c>enemy.hp</c>) are treated as object asset references, so integer literals assigned to them
+    /// can be expanded into object names. This is disabled by default, as structs and instance IDs
+    /// can also appear before a member access.
+    /// Require <see cref="ReverseInferVariableTypes"/> to be enabled.
+    /// </summary>
+    public bool InferObjectIdFromMemberAccess { get; }
+
+    /// <summary>
+    /// If true, all code entries are scanned once at startup to infer and register variable types
+    /// before any code entry is decompiled. This makes resource-name expansion independent of the
+    /// order in which code entries are opened. Requires <see cref="InferFunctionArgumentTypes"/> and
+    /// <see cref="ReverseInferVariableTypes"/> to be enabled.
+    /// </summary>
+    public bool PreScanAllCodeForTypes { get; }
+
+    /// <summary>
     /// Base type name for the enum representing all unknown enum values.
     /// Should be a valid enum name in GML, or <see langword="null"/> if the unknown enum should not be generated/used at all.
     /// </summary>
@@ -217,6 +234,8 @@ public class DecompileSettings : IDecompileSettings
     public bool InferFunctionArgumentTypes { get; set; } = true;
     public bool ReverseInferVariableTypes { get; set; } = true;
     public bool InlinePropagateVariableTypes { get; set; } = true;
+    public bool InferObjectIdFromMemberAccess { get; set; } = false;
+    public bool PreScanAllCodeForTypes { get; set; } = true;
     public string UnknownEnumName { get; set; } = "UnknownEnum";
     public string UnknownEnumValuePattern { get; set; } = "Value_{0}";
     public string UnknownArgumentNamePattern { get; set; } = "arg{0}";

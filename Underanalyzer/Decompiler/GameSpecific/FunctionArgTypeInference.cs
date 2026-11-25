@@ -200,10 +200,9 @@ public static class FunctionArgTypeInference
         {
             if (value is VariableNode variable && !IsArgumentVariable(variable))
             {
-                string variableName = variable.Variable.Name.Content;
-                if (globalResolver.ResolveVariableType(cleaner, variableName) is null)
+                if (globalResolver.ResolveVariableType(cleaner, GetVariableLookupName(variable)) is null)
                 {
-                    globalResolver.DefineVariableTypeForCodeEntry(codeEntryName, variableName, returnType);
+                    RegisterVariableType(globalResolver, codeEntryName, variable, returnType);
                 }
             }
         }
@@ -239,7 +238,7 @@ public static class FunctionArgTypeInference
             {
                 continue;
             }
-            IMacroType? variableType = cleaner.GlobalMacroResolver.ResolveVariableType(cleaner, variable.Variable.Name.Content);
+            IMacroType? variableType = cleaner.GlobalMacroResolver.ResolveVariableType(cleaner, GetVariableLookupName(variable));
             if (variableType is null)
             {
                 continue;
@@ -432,7 +431,7 @@ public static class FunctionArgTypeInference
             return;
         }
         // Don't override an already-registered (potentially more specific) type
-        if (globalResolver.ResolveVariableType(cleaner, destination.Variable.Name.Content) is not null)
+        if (globalResolver.ResolveVariableType(cleaner, GetVariableLookupName(destination)) is not null)
         {
             return;
         }
@@ -447,7 +446,7 @@ public static class FunctionArgTypeInference
         {
             return;
         }
-        globalResolver.DefineVariableTypeForCodeEntry(codeEntryName, destination.Variable.Name.Content, argType);
+        RegisterVariableType(globalResolver, codeEntryName, destination, argType);
     }
 
     /// <summary>
@@ -465,6 +464,30 @@ public static class FunctionArgTypeInference
     }
 
     /// <summary>
+    /// Returns the macro type lookup name for a variable, taking explicit global scope into account.
+    /// </summary>
+    private static string GetVariableLookupName(VariableNode variable)
+    {
+        return GlobalMacroTypeResolver.GetVariableLookupName(variable.Variable.Name.Content, variable.Left);
+    }
+
+    /// <summary>
+    /// Registers a variable's macro type in the appropriate scope (global, or per code entry).
+    /// </summary>
+    private static void RegisterVariableType(GlobalMacroTypeResolver resolver, string codeEntryName,
+                                             VariableNode variable, IMacroType type)
+    {
+        if (GlobalMacroTypeResolver.IsGlobalReference(variable.Left))
+        {
+            resolver.DefineGlobalVariableType(variable.Variable.Name.Content, type);
+        }
+        else
+        {
+            resolver.DefineVariableTypeForCodeEntry(codeEntryName, variable.Variable.Name.Content, type);
+        }
+    }
+
+    /// <summary>
     /// Internal AST analyzer that performs the actual data-flow tracking.
     /// </summary>
     private sealed class Analyzer
@@ -476,30 +499,59 @@ public static class FunctionArgTypeInference
         /// </summary>
         private readonly List<IMacroType?> _argumentTypes = [];
 
-        /// <summary>
-        /// Mapping of local variable name to the set of argument indices that may currently flow into it.
-        /// </summary>
-        private readonly Dictionary<string, HashSet<int>> _localToArgSources = [];
+        private enum VariableScope
+        {
+            Local,
+            Self,
+            Global
+        }
 
         /// <summary>
-        /// Mapping of non-local variable name to the set of argument indices that were assigned to it,
+        /// Identifies a variable by its scope and name, so that same-named locals, instance
+        /// variables, and globals are never conflated.
+        /// </summary>
+        private readonly record struct VariableKey(VariableScope Scope, string Name);
+
+        /// <summary>
+        /// Mapping of local variable to the set of argument indices that may currently flow into it.
+        /// </summary>
+        private readonly Dictionary<VariableKey, HashSet<int>> _localToArgSources = [];
+
+        /// <summary>
+        /// Mapping of non-local variable to the set of argument indices that were assigned to it,
         /// used for reverse propagation of inferred argument types onto variables.
         /// </summary>
-        private readonly Dictionary<string, HashSet<int>> _variableToArgSources = [];
+        private readonly Dictionary<VariableKey, HashSet<int>> _variableToArgSources = [];
 
         /// <summary>
-        /// Mapping of variable name to the macro types of the positions it is used at, used to infer
+        /// Mapping of variable to the macro types of the positions it is used at, used to infer
         /// a variable's type from its own usage (e.g. a local variable passed to a sprite-typed
         /// function argument, like <c>draw_sprite_ext(fire_spr, ...)</c>).
         /// </summary>
-        private readonly Dictionary<string, List<IMacroType>> _variableUsageTypes = [];
+        private readonly Dictionary<VariableKey, List<IMacroType>> _variableUsageTypes = [];
 
         /// <summary>
-        /// Names of simple instance variables (self/unqualified, not local or global) that had types
-        /// assigned from usage or arguments. These types are also registered per-object, so they can
-        /// be shared across the events of the same object.
+        /// Assignment edges for simple variable copies: each destination maps to the variables it
+        /// may have been assigned from.
         /// </summary>
-        private readonly HashSet<string> _instanceVariableNames = [];
+        private readonly Dictionary<VariableKey, HashSet<VariableKey>> _assignmentSources = [];
+
+        /// <summary>
+        /// Variables that have at least one assignment in this code entry.
+        /// </summary>
+        private readonly HashSet<VariableKey> _assignedVariables = [];
+
+        /// <summary>
+        /// Variables with any assignment that is not a plain integer literal or a plain variable
+        /// copy. Types are not propagated backwards through these, to limit false positives.
+        /// </summary>
+        private readonly HashSet<VariableKey> _impureVariables = [];
+
+        /// <summary>
+        /// Variables used as the target of a member access (e.g. <c>enemy</c> in <c>enemy.hp</c>),
+        /// optionally treated as object references.
+        /// </summary>
+        private readonly HashSet<VariableKey> _memberAccessTargets = [];
 
         /// <summary>
         /// The highest argument index referenced so far.
@@ -558,16 +610,16 @@ public static class FunctionArgTypeInference
             }
         }
 
-        private void RecordLocalSources(string name, HashSet<int> sources)
+        private void RecordLocalSources(VariableKey key, HashSet<int> sources)
         {
             if (sources.Count == 0)
             {
                 return;
             }
-            if (!_localToArgSources.TryGetValue(name, out HashSet<int>? existing))
+            if (!_localToArgSources.TryGetValue(key, out HashSet<int>? existing))
             {
                 existing = [];
-                _localToArgSources[name] = existing;
+                _localToArgSources[key] = existing;
             }
             existing.UnionWith(sources);
         }
@@ -575,27 +627,27 @@ public static class FunctionArgTypeInference
         /// <summary>
         /// Records that the given variable is assigned from the given argument sources.
         /// </summary>
-        private void RecordVariableSources(string name, HashSet<int> sources)
+        private void RecordVariableSources(VariableKey key, HashSet<int> sources)
         {
             if (sources.Count == 0)
             {
                 return;
             }
-            if (!_variableToArgSources.TryGetValue(name, out HashSet<int>? existing))
+            if (!_variableToArgSources.TryGetValue(key, out HashSet<int>? existing))
             {
                 existing = [];
-                _variableToArgSources[name] = existing;
+                _variableToArgSources[key] = existing;
             }
             existing.UnionWith(sources);
         }
 
         /// <summary>
         /// Records that the given expression is used as the given macro type, if the expression is a
-        /// simple non-argument variable that a type can be safely inferred for.
+        /// simple variable that a type can be safely inferred for.
         /// </summary>
         private void RecordVariableUsageType(IExpressionNode expression, IMacroType type)
         {
-            if (expression is VariableNode variable && IsSimpleVariable(variable))
+            if (expression is VariableNode variable && GetVariableKey(variable) is VariableKey key)
             {
                 if (type is IMacroTypeConditional)
                 {
@@ -603,66 +655,67 @@ public static class FunctionArgTypeInference
                     // as a variable's inferred type
                     return;
                 }
-                string name = variable.Variable.Name.Content;
-                if (!_variableUsageTypes.TryGetValue(name, out List<IMacroType>? list))
+                if (!_variableUsageTypes.TryGetValue(key, out List<IMacroType>? list))
                 {
                     list = [];
-                    _variableUsageTypes[name] = list;
+                    _variableUsageTypes[key] = list;
                 }
                 list.Add(type);
-                if (IsInstanceVariableForSharing(variable))
-                {
-                    _instanceVariableNames.Add(name);
-                }
             }
         }
 
         /// <summary>
-        /// Records that the given destination variable (assigned from arguments) is a simple instance
-        /// variable whose type can be shared across the object's events.
+        /// Returns the scoped key for the given variable, or <see langword="null"/> if it is not a
+        /// simple local/self/global variable (e.g. an array element or a variable on another instance).
         /// </summary>
-        private void RecordInstanceVariableForSharing(VariableNode destination)
-        {
-            if (IsInstanceVariableForSharing(destination))
-            {
-                _instanceVariableNames.Add(destination.Variable.Name.Content);
-            }
-        }
-
-        /// <summary>
-        /// Returns whether the given variable is a simple instance variable (self or unqualified, not
-        /// local and not global) whose type can be shared across the events of the same object.
-        /// </summary>
-        private static bool IsInstanceVariableForSharing(VariableNode node)
-        {
-            if (!IsPropagatableVariable(node))
-            {
-                return false;
-            }
-            return node.Left is not (InstanceTypeNode { InstanceType: InstanceType.Global } or
-                                     Int16Node { Value: (short)InstanceType.Global });
-        }
-
-        /// <summary>
-        /// Returns whether the given variable is a simple self/global/local variable that a type can
-        /// be inferred for (as opposed to a variable on another instance, or an array element).
-        /// </summary>
-        private static bool IsSimpleVariable(VariableNode node)
+        private static VariableKey? GetVariableKey(VariableNode node)
         {
             if (node.ArrayIndices is not null)
             {
-                return false;
+                return null;
             }
-            return node.Left is null or
-                InstanceTypeNode { InstanceType: InstanceType.Self or InstanceType.Global or InstanceType.Local } or
-                Int16Node { Value: (short)InstanceType.Self or (short)InstanceType.Global };
+
+            string name = node.Variable.Name.Content;
+            if (GlobalMacroTypeResolver.IsGlobalReference(node.Left))
+            {
+                return new VariableKey(VariableScope.Global, name);
+            }
+            if (IsLocalVariable(node))
+            {
+                return new VariableKey(VariableScope.Local, name);
+            }
+            if (node.Left is null or
+                InstanceTypeNode { InstanceType: InstanceType.Self } or
+                Int16Node { Value: (short)InstanceType.Self })
+            {
+                return new VariableKey(VariableScope.Self, name);
+            }
+            return null;
         }
 
         /// <summary>
-        /// Reverse inference: registers the inferred argument types onto variables that were assigned
-        /// from those arguments, so that literals assigned to those variables (e.g. colors) can be
-        /// expanded by the cleaner. Types are registered per code entry, and never override types
-        /// that are already registered.
+        /// Returns the name to use for macro type lookup/registration for the given scoped variable.
+        /// </summary>
+        private static string GetLookupName(VariableKey key)
+        {
+            return key.Scope == VariableScope.Global
+                ? GlobalMacroTypeResolver.GlobalVariablePrefix + key.Name
+                : key.Name;
+        }
+
+        /// <summary>
+        /// Returns whether the given variable has only literal-integer or variable-copy assignments.
+        /// </summary>
+        private bool IsPureVariable(VariableKey key)
+        {
+            return _assignedVariables.Contains(key) && !_impureVariables.Contains(key);
+        }
+
+        /// <summary>
+        /// Reverse inference: registers inferred types onto variables that flow into typed positions
+        /// (e.g. built-in function arguments), following plain variable-copy assignments back to the
+        /// variables holding numeric literals. Types are registered per scope (local, object, global)
+        /// and never override types that are already registered.
         /// </summary>
         public void RegisterInferredVariableTypes()
         {
@@ -675,27 +728,29 @@ public static class FunctionArgTypeInference
                 return;
             }
 
+            Dictionary<VariableKey, IMacroType> typeMap = [];
+
             // Gather all variable assignments (locals plus non-locals) in one place
-            Dictionary<string, HashSet<int>> allSources = [];
-            foreach ((string name, HashSet<int> sources) in _localToArgSources)
+            Dictionary<VariableKey, HashSet<int>> allSources = [];
+            foreach ((VariableKey key, HashSet<int> sources) in _localToArgSources)
             {
-                allSources[name] = sources;
+                allSources[key] = sources;
             }
-            foreach ((string name, HashSet<int> sources) in _variableToArgSources)
+            foreach ((VariableKey key, HashSet<int> sources) in _variableToArgSources)
             {
-                if (allSources.TryGetValue(name, out HashSet<int>? existing))
+                if (allSources.TryGetValue(key, out HashSet<int>? existing))
                 {
                     existing.UnionWith(sources);
                 }
                 else
                 {
-                    allSources[name] = sources;
+                    allSources[key] = sources;
                 }
             }
 
-            foreach ((string name, HashSet<int> sources) in allSources)
+            // Seed types from variables assigned function arguments with known types
+            foreach ((VariableKey key, HashSet<int> sources) in allSources)
             {
-                // Collect the inferred types of all argument indices assigned to this variable
                 List<IMacroType> types = [];
                 foreach (int index in sources)
                 {
@@ -704,31 +759,20 @@ public static class FunctionArgTypeInference
                         types.Add(type);
                     }
                 }
-                if (types.Count == 0)
+                if (types.Count > 0)
                 {
-                    continue;
+                    typeMap[key] = types.Count == 1 ? types[0] : new UnionMacroType(types);
                 }
-
-                // Don't override an already-registered (potentially more specific) type
-                if (globalResolver.ResolveVariableType(_cleaner, name) is not null)
-                {
-                    continue;
-                }
-
-                IMacroType resultType = types.Count == 1 ? types[0] : new UnionMacroType(types);
-                globalResolver.DefineVariableTypeForCodeEntry(codeEntryName, name, resultType);
-                RegisterInstanceVariableTypeForObject(globalResolver, codeEntryName, name, resultType);
             }
 
-            // Infer variable types from their usage at typed positions (e.g. a local variable passed
-            // to a sprite-typed function argument, like "fire_spr = 496" used in draw_sprite_ext),
-            // so that literals assigned to those variables can be expanded. All recorded usage types
-            // must agree for the type to be registered.
-            foreach ((string name, List<IMacroType> types) in _variableUsageTypes)
+            // Seed types from variables used at typed positions (e.g. a local variable passed to a
+            // sprite-typed function argument, like "fire_spr = 496" used in draw_sprite_ext).
+            // All recorded usage types must agree for the type to be used.
+            foreach ((VariableKey key, List<IMacroType> types) in _variableUsageTypes)
             {
-                // Don't override an already-registered (potentially more specific) type
-                if (globalResolver.ResolveVariableType(_cleaner, name) is not null)
+                if (typeMap.ContainsKey(key))
                 {
+                    // Argument-derived types take precedence, matching previous behavior
                     continue;
                 }
 
@@ -748,8 +792,82 @@ public static class FunctionArgTypeInference
                 }
                 if (consistent && resultType is not null)
                 {
-                    globalResolver.DefineVariableTypeForCodeEntry(codeEntryName, name, resultType);
-                    RegisterInstanceVariableTypeForObject(globalResolver, codeEntryName, name, resultType);
+                    typeMap[key] = resultType;
+                }
+            }
+
+            // Optionally treat variables used before a member access (e.g. "enemy" in "enemy.hp")
+            // as object references. Structs and instance IDs can also appear before a member access,
+            // so only variables with integer-literal/copy assignments in this code entry are used.
+            // Explicit globals are excluded: their types are shared game-wide and a wrong object
+            // type would override a more specific type inferred elsewhere (e.g. a room variable).
+            if (_cleaner.Context.Settings.InferObjectIdFromMemberAccess)
+            {
+                foreach (VariableKey key in _memberAccessTargets)
+                {
+                    if (key.Scope != VariableScope.Global &&
+                        !_impureVariables.Contains(key) &&
+                        !typeMap.ContainsKey(key))
+                    {
+                        typeMap[key] = new AssetMacroType(AssetType.Object);
+                    }
+                }
+            }
+
+            // Propagate types backwards along plain variable-copy assignments
+            HashSet<VariableKey> conflicts = [];
+            Queue<VariableKey> queue = new(typeMap.Keys);
+            while (queue.Count > 0)
+            {
+                VariableKey key = queue.Dequeue();
+                if (conflicts.Contains(key) || !typeMap.TryGetValue(key, out IMacroType? type))
+                {
+                    continue;
+                }
+                if (!_assignmentSources.TryGetValue(key, out HashSet<VariableKey>? sources))
+                {
+                    continue;
+                }
+                foreach (VariableKey source in sources)
+                {
+                    if (!IsPureVariable(source) || conflicts.Contains(source))
+                    {
+                        continue;
+                    }
+                    if (typeMap.TryGetValue(source, out IMacroType? existing))
+                    {
+                        if (!SameMacroType(existing, type))
+                        {
+                            conflicts.Add(source);
+                        }
+                        continue;
+                    }
+                    typeMap[source] = type;
+                    queue.Enqueue(source);
+                }
+            }
+
+            foreach ((VariableKey key, IMacroType type) in typeMap)
+            {
+                if (conflicts.Contains(key))
+                {
+                    continue;
+                }
+
+                // Don't override an already-registered (potentially more specific) type
+                if (globalResolver.ResolveVariableType(_cleaner, GetLookupName(key)) is not null)
+                {
+                    continue;
+                }
+
+                if (key.Scope == VariableScope.Global)
+                {
+                    globalResolver.DefineGlobalVariableType(key.Name, type);
+                }
+                else
+                {
+                    globalResolver.DefineVariableTypeForCodeEntry(codeEntryName, key.Name, type);
+                    RegisterInstanceVariableTypeForObject(globalResolver, codeEntryName, key, type);
                 }
             }
         }
@@ -758,12 +876,13 @@ public static class FunctionArgTypeInference
         /// Registers a variable type for the whole object as well, so that instance variables can
         /// share their types across the events of the same object.
         /// </summary>
-        private void RegisterInstanceVariableTypeForObject(GlobalMacroTypeResolver globalResolver, string codeEntryName, string name, IMacroType type)
+        private static void RegisterInstanceVariableTypeForObject(GlobalMacroTypeResolver globalResolver, string codeEntryName,
+                                                                  VariableKey key, IMacroType type)
         {
-            if (_instanceVariableNames.Contains(name) &&
+            if (key.Scope == VariableScope.Self &&
                 GlobalMacroTypeResolver.GetObjectNameFromCodeEntryName(codeEntryName) is string objectName)
             {
-                globalResolver.DefineVariableTypeForObject(objectName, name, type);
+                globalResolver.DefineVariableTypeForObject(objectName, key.Name, type);
             }
         }
 
@@ -794,12 +913,10 @@ public static class FunctionArgTypeInference
             }
 
             // Local variable, tracking data flow
-            if (IsLocalVariable(node))
+            if (GetVariableKey(node) is { Scope: VariableScope.Local } key &&
+                _localToArgSources.TryGetValue(key, out HashSet<int>? sources) && sources.Count > 0)
             {
-                if (_localToArgSources.TryGetValue(node.Variable.Name.Content, out HashSet<int>? sources) && sources.Count > 0)
-                {
-                    return new HashSet<int>(sources);
-                }
+                return new HashSet<int>(sources);
             }
 
             return EmptySources;
@@ -961,11 +1078,43 @@ public static class FunctionArgTypeInference
             }
         }
 
+        /// <summary>
+        /// When enabled, records the variable before a member access (e.g. <c>enemy</c> in
+        /// <c>enemy.hp</c>) as a potential object reference, so integer literals assigned to it can be
+        /// expanded into object names.
+        /// </summary>
+        private void RecordMemberAccessTarget(VariableNode variable)
+        {
+            if (!_cleaner.Context.Settings.InferObjectIdFromMemberAccess)
+            {
+                return;
+            }
+            if (variable.Left is InstanceTypeNode or Int16Node)
+            {
+                return;
+            }
+            if (variable.Left is VariableNode root && GetVariableRoot(root) is VariableNode rootNode &&
+                GetVariableKey(rootNode) is VariableKey key)
+            {
+                _memberAccessTargets.Add(key);
+            }
+        }
+
+        private static VariableNode? GetVariableRoot(VariableNode node)
+        {
+            while (node.Left is VariableNode child)
+            {
+                node = child;
+            }
+            return node;
+        }
+
         private HashSet<int> VisitExpression(IExpressionNode expression)
         {
             switch (expression)
             {
                 case VariableNode variable:
+                    RecordMemberAccessTarget(variable);
                     return GetVariableSources(variable);
                 case FunctionCallNode functionCall:
                     return ProcessFunctionCall(functionCall);
@@ -1243,10 +1392,44 @@ public static class FunctionArgTypeInference
 
         private void ProcessAssignment(AssignNode assign)
         {
+            VariableKey? destinationKey = assign.Variable is VariableNode destinationVariable &&
+                                            !IsArgumentVariable(destinationVariable)
+                ? GetVariableKey(destinationVariable)
+                : null;
+
             if (assign.Value is null)
             {
-                // Prefix/postfix assignments carry no type information by themselves
+                // Prefix/postfix assignments carry no type information by themselves, but they make
+                // the destination unsuitable for backwards type propagation.
+                if (destinationKey is VariableKey postfixKey)
+                {
+                    _assignedVariables.Add(postfixKey);
+                    _impureVariables.Add(postfixKey);
+                }
                 return;
+            }
+
+            // Track assignment purity and plain variable-copy edges before looking at argument flow
+            if (destinationKey is VariableKey key)
+            {
+                _assignedVariables.Add(key);
+                if (IsPureAssignedValue(assign.Value))
+                {
+                    if (assign.Value is VariableNode valueVariable &&
+                        GetVariableKey(valueVariable) is VariableKey sourceKey)
+                    {
+                        if (!_assignmentSources.TryGetValue(key, out HashSet<VariableKey>? edges))
+                        {
+                            edges = [];
+                            _assignmentSources[key] = edges;
+                        }
+                        edges.Add(sourceKey);
+                    }
+                }
+                else
+                {
+                    _impureVariables.Add(key);
+                }
             }
 
             HashSet<int> valueSources = VisitExpression(assign.Value);
@@ -1273,28 +1456,41 @@ public static class FunctionArgTypeInference
             }
 
             // Assignment to a simple local variable -> track data flow through it
-            if (IsLocalVariable(destination))
+            if (destinationKey is VariableKey destinationKeyValue)
             {
-                RecordLocalSources(destination.Variable.Name.Content, valueSources);
-                return;
-            }
+                if (destinationKeyValue.Scope == VariableScope.Local)
+                {
+                    RecordLocalSources(destinationKeyValue, valueSources);
+                    return;
+                }
 
-            // Assignment to a variable with a known macro type (e.g. sprite_index) -> infer argument types
-            if (destination.ArrayIndices is null &&
-                _cleaner.GlobalMacroResolver.ResolveVariableType(_cleaner, destination.Variable.Name.Content) is IMacroType destinationType)
-            {
-                RecordTypesForSources(valueSources, destinationType);
-                RecordVariableUsageType(assign.Value, destinationType);
-                return;
-            }
+                // Assignment to a variable with a known macro type (e.g. sprite_index) -> infer argument types
+                if (_cleaner.GlobalMacroResolver.ResolveVariableType(_cleaner, GetLookupName(destinationKeyValue)) is IMacroType destinationType)
+                {
+                    RecordTypesForSources(valueSources, destinationType);
+                    RecordVariableUsageType(assign.Value, destinationType);
+                    return;
+                }
 
-            // Assignment of an argument to a regular self/global variable -> track it for reverse
-            // propagation, so that literals assigned to the variable later (e.g. colors) get expanded.
-            if (IsPropagatableVariable(destination))
-            {
-                RecordVariableSources(destination.Variable.Name.Content, valueSources);
-                RecordInstanceVariableForSharing(destination);
+                // Assignment of an argument to a regular self/global variable -> track it for reverse
+                // propagation, so that literals assigned to the variable later (e.g. colors) get expanded.
+                RecordVariableSources(destinationKeyValue, valueSources);
             }
+        }
+
+        /// <summary>
+        /// Returns whether the given assigned value is a plain integer literal, a direct asset
+        /// reference, or a plain variable copy. Only these values are considered pure enough for
+        /// backwards type propagation.
+        /// </summary>
+        private static bool IsPureAssignedValue(IExpressionNode value)
+        {
+            return value switch
+            {
+                Int16Node or Int32Node or Int64Node or AssetReferenceNode => true,
+                VariableNode variable => GetVariableKey(variable) is not null,
+                _ => false
+            };
         }
 
         /// <summary>
